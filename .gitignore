@@ -1,0 +1,22 @@
+# Build
+/target/
+
+# IDEs
+**/*.rs.bk
+**/*.swp
+/.vscode/
+/.idea/
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# Logs & temp
+*.log
+*.tmp
+
+# Cargo files
+Cargo.lock
+
+# Env files (si tu en as)
+.env
