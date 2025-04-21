@@ -3,11 +3,12 @@ use serde::{Deserialize, Serialize};
 use serde_json;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
+//use std::collections::HashSet;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::io;
 use std::fs::{File, OpenOptions};
-use std::io::{BufReader, BufWriter, Write};
+use std::io::{BufReader, BufWriter/*, Write*/};
 
 // Structures
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -35,14 +36,18 @@ struct Block {
     hash: String,
 }
 
-#[derive(Debug)]
+/*#[derive(Debug)]
 struct ReferralRegistry {
     referrals: HashMap<String, String>,
     known_wallets: Vec<String>,
-}
+}*/
 
-// Blocks
+// Blockchain
+// ----------
+
 impl Block {
+
+    // New block
     fn new(index: u64, transactions: Vec<Transaction>, previous_hash: String) -> Self {
         let timestamp = current_timestamp();
         let mut block = Block {
@@ -56,6 +61,7 @@ impl Block {
         block
     }
 
+    // HASH
     fn calculate_hash(&self) -> String {
         let data = format!("{}{}{:?}{}", self.index, self.timestamp, self.transactions, self.previous_hash);
         let mut hasher = Sha256::new();
@@ -64,7 +70,122 @@ impl Block {
     }
 }
 
-// // Referral
+// Create a transaction
+fn create_transaction(wallets: &Vec<Wallet>, ledger: &HashMap<String, f64>, sender: &str, recipient: &str, amount: f64,) -> Option<Transaction> {
+    if !is_valid_address(sender) || !is_valid_address(recipient) {
+        println!("Erreur : adresse invalide (doit commencer par 'SRKS_').");
+        return None;
+    }
+
+    let sender_wallet = find_wallet(wallets, sender);
+    let recipient_wallet = find_wallet(wallets, recipient);
+
+    // Sold out
+    if sender != "SRKS_genesis" {
+        let balance = ledger.get(sender).unwrap_or(&0.0);
+        if *balance < amount {
+            println!(
+                "Erreur : solde insuffisant. Solde actuel de {} : {}",
+                sender, balance
+            );
+            return None;
+        }
+    }
+
+    // It's OK
+    if !sender_wallet.is_none() && !recipient_wallet.is_none() {
+        println!("Transaction has been saved");
+
+        Some(Transaction {
+            id: Uuid::new_v4(),
+            sender: sender.to_string(),
+            recipient: recipient.to_string(),
+            amount,
+            timestamp: current_timestamp(),
+            referrer: sender_wallet?.referrer.clone(),
+        })
+    }
+    // Address not found
+    else {
+        if sender_wallet.is_none() {
+            println!("Sender ({}) not found", sender);
+        }
+        if recipient_wallet.is_none() {
+            println!("Recipient ({}) not found", recipient);
+        }
+
+        return None;
+    }
+}
+
+// Save blockchain
+fn save_blockchain(blockchain: &Vec<Block>, filename: &str) {
+    let file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(filename)
+        .expect("Impossible d'ouvrir le fichier de sortie");
+
+    let writer = BufWriter::new(file);
+    serde_json::to_writer_pretty(writer, &blockchain).expect("Erreur lors de la sérialisation de la blockchain");
+    println!("Blockchain sauvegardée dans '{}'", filename);
+}
+
+// Load blockchain
+fn load_blockchain(filename: &str) -> Vec<Block> {
+    let file = File::open(filename);
+
+    match file {
+        Ok(f) => {
+            let reader = BufReader::new(f);
+            let blockchain: Vec<Block> = serde_json::from_reader(reader).unwrap_or_else(|_| {
+                println!("Fichier corrompu ou vide, initialisation d'une nouvelle chaîne.");
+                vec![]
+            });
+            println!("Blockchain chargée depuis '{}'", filename);
+            blockchain
+        }
+        Err(_) => {
+            println!("Aucun fichier existant trouvé, création d'une nouvelle blockchain.");
+            vec![]
+        }
+    }
+}
+
+// ledger
+// ------
+
+// Initialize ledger
+fn initialize_ledger_from_blockchain(blockchain: &Vec<Block>) -> HashMap<String, f64> {
+    let mut ledger: HashMap<String, f64> = HashMap::new();
+
+    for block in blockchain {
+        for tx in &block.transactions {
+            if tx.sender != "SRKS_genesis" {
+                *ledger.entry(tx.sender.clone()).or_insert(0.0) -= tx.amount;
+            }
+
+            *ledger.entry(tx.recipient.clone()).or_insert(0.0) += tx.amount;
+        }
+    }
+
+    ledger
+}
+
+// Update ledger
+fn update_ledger_with_block(ledger: &mut HashMap<String, f64>, block: &Block) {
+    for tx in &block.transactions {
+        if tx.sender != "SRKS_genesis" {
+            *ledger.entry(tx.sender.clone()).or_insert(0.0) -= tx.amount;
+        }
+        *ledger.entry(tx.recipient.clone()).or_insert(0.0) += tx.amount;
+    }
+}
+
+// Referral
+// --------
+
 // impl ReferralRegistry {
 //     fn new() -> Self {
 //         ReferralRegistry {
@@ -103,73 +224,13 @@ impl Block {
 //     }
 // }
 
-// Current date
-fn current_timestamp() -> u128 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis()
-}
-
-// Find a wallet
-fn find_wallet(wallets: &Vec<Wallet>, address: &str) -> Option<Wallet> {
-    wallets.iter().find(|w| w.address == address).cloned()
-}
-
-// Create a transaction
-fn create_transaction(wallets: &Vec<Wallet>, sender: &str, recipient: &str, amount: f64) -> Option<Transaction> {
-    let sender_wallet = find_wallet(wallets, sender)?;
-    let recipient_wallet = find_wallet(wallets, recipient)?;
-
-    Some(Transaction {
-        id: Uuid::new_v4(),
-        sender: sender.to_string(),
-        recipient: recipient.to_string(),
-        amount,
-        timestamp: current_timestamp(),
-        referrer: sender_wallet.referrer.clone(),
-    })
-}
-
-// Save blockchain
-fn save_blockchain(blockchain: &Vec<Block>, filename: &str) {
-    let file = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(filename)
-        .expect("Impossible d'ouvrir le fichier de sortie");
-
-    let writer = BufWriter::new(file);
-    serde_json::to_writer_pretty(writer, &blockchain).expect("Erreur lors de la sérialisation de la blockchain");
-    println!("Blockchain sauvegardée dans '{}'", filename);
-}
-
-// Load blockchain
-fn load_blockchain(filename: &str) -> Vec<Block> {
-    let file = File::open(filename);
-
-    match file {
-        Ok(f) => {
-            let reader = BufReader::new(f);
-            let blockchain: Vec<Block> = serde_json::from_reader(reader).unwrap_or_else(|_| {
-                println!("Fichier corrompu ou vide, initialisation d'une nouvelle chaîne.");
-                vec![]
-            });
-            println!("Blockchain chargée depuis '{}'", filename);
-            blockchain
-        }
-        Err(_) => {
-            println!("Aucun fichier existant trouvé, création d'une nouvelle blockchain.");
-            vec![]
-        }
-    }
-}
+// Tools
+// -----
 
 // Get the latest HASH
 fn get_latest_hash(blockchain: &Vec<Block>) -> String {
-    if let Some(last_block) = blockchain.last() {
-        last_block.hash.clone()
-    } else {
-        String::from("0")
-    }
+    if let Some(last_block) = blockchain.last() { last_block.hash.clone() }
+    else { String::from("0") }
 }
 
 // Simple prompt
@@ -180,6 +241,21 @@ fn prompt(text: &str) -> String {
     _prompt.trim().to_string()
 }
 
+// Current date
+fn current_timestamp() -> u128 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis()
+}
+
+// Find a wallet
+fn find_wallet(wallets: &Vec<Wallet>, address: &str) -> Option<Wallet> {
+    wallets.iter().find(|w| w.address == address).cloned()
+}
+
+// Check wallet
+fn is_valid_address(address: &str) -> bool {
+    address.starts_with("SRKS_")
+}
+
 // Main
 fn main() {
     println!("Shariks Chain - Initialisation de la blockchain");
@@ -188,19 +264,26 @@ fn main() {
     let filename = "blockchain.json";
     let mut blockchain = load_blockchain(filename);
 
+    // Init ledger
+    let mut ledger = initialize_ledger_from_blockchain(&blockchain);
+
     // Create wallets for test
     let wallets = vec![
         Wallet {
-            address: "wallet_parrain_1".to_string(),
+            address: "SRKS_genesis".to_string(),
             referrer: None,
         },
         Wallet {
-            address: "wallet_filleul_1".to_string(),
-            referrer: Some("wallet_parrain_1".to_string()),
+            address: "SRKS_parrain_1".to_string(),
+            referrer: None,
         },
         Wallet {
-            address: "wallet_filleul_2".to_string(),
-            referrer: Some("wallet_parrain_1".to_string()),
+            address: "SRKS_filleul_1".to_string(),
+            referrer: Some("SRKS_parrain_1".to_string()),
+        },
+        Wallet {
+            address: "SRKS_filleul_2".to_string(),
+            referrer: Some("SRKS_parrain_1".to_string()),
         },
     ];
 
@@ -208,7 +291,7 @@ fn main() {
     if blockchain.is_empty() {
         let genesis_tx = Transaction {
             id: Uuid::new_v4(),
-            sender: "genesis".to_string(),
+            sender: "SRKS_genesis".to_string(),
             recipient: "founder_wallet_address".to_string(),
             amount: 100000000.0,
             timestamp: current_timestamp(),
@@ -236,12 +319,11 @@ fn main() {
                 let recipient = prompt("Destinataire :");
                 let amount: f64 = prompt("Montant :").trim().parse().unwrap_or(0.0);
 
-                if let Some(tx) = create_transaction(&wallets, &sender, &recipient, amount) {
-                    let block = Block::new(1, vec![tx], get_latest_hash(&blockchain));
+                if let Some(tx) = create_transaction(&wallets, &ledger, &sender, &recipient, amount) {
+                    let block = Block::new(blockchain.len() as u64, vec![tx], get_latest_hash(&blockchain));
+                    update_ledger_with_block(&mut ledger, &block);
                     blockchain.push(block.clone());
                     println!("\nTransaction : {:?}", block);
-                } else {
-                    println!("Erreur : transaction invalide (adresse inconnue)");
                 }
             }
             "2" => {
