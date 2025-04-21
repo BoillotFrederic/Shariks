@@ -241,6 +241,14 @@ fn prompt(text: &str) -> String {
     _prompt.trim().to_string()
 }
 
+// Get soldes
+fn view_balances(ledger: &HashMap<String, f64>) {
+    println!("\n--- Soldes des wallets ---");
+    for (adresse, solde) in ledger.iter() {
+        println!("{} : {:.2} SRKS", adresse, solde);
+    }
+}
+
 // Current date
 fn current_timestamp() -> u128 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis()
@@ -292,7 +300,7 @@ fn main() {
         let genesis_tx = Transaction {
             id: Uuid::new_v4(),
             sender: "SRKS_genesis".to_string(),
-            recipient: "founder_wallet_address".to_string(),
+            recipient: "SRKS_genesis".to_string(),
             amount: 100000000.0,
             timestamp: current_timestamp(),
             referrer: None,
@@ -300,6 +308,7 @@ fn main() {
 
         let genesis_block = Block::new(0, vec![genesis_tx], "0".to_string());
         blockchain.push(genesis_block.clone());
+        update_ledger_with_block(&mut ledger, &genesis_block);
         save_blockchain(&blockchain, filename);
         println!("Bloc Genesis : {:?}", genesis_block);
     }
@@ -309,7 +318,8 @@ fn main() {
         println!("\n--- Menu ---");
         println!("1. Ajouter une transaction");
         println!("2. Voir les blocs");
-        println!("3. Sauvegarder et quitter");
+        println!("3. Afficher les soldes");
+        println!("4. Sauvegarder et quitter");
 
         let mut choice = String::new();
         io::stdin().read_line(&mut choice).expect("Erreur lecture");
@@ -333,6 +343,9 @@ fn main() {
                 }
             }
             "3" => {
+                view_balances(&ledger);
+            }
+            "4" => {
                 save_blockchain(&blockchain, filename);
                 println!("Au revoir !");
                 break;
