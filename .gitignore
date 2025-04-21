@@ -18,5 +18,8 @@ Thumbs.db
 # Cargo files
 Cargo.lock
 
+# Blockchain
+blockchain.json
+
 # Env files (si tu en as)
 .env
