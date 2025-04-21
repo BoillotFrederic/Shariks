@@ -3,12 +3,17 @@ use serde::{Deserialize, Serialize};
 use serde_json;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
-//use std::collections::HashSet;
+use once_cell::sync::Lazy;
+use std::collections::HashSet;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::io;
 use std::fs::{File, OpenOptions};
 use std::io::{BufReader, BufWriter/*, Write*/};
+
+// Type
+type Ledger = HashMap<String, f64>;
+type Blockchain = Vec<Block>;
 
 // Structures
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -23,6 +28,7 @@ struct Transaction {
     sender: String,
     recipient: String,
     amount: f64,
+    fee: f64,
     timestamp: u128,
     referrer: Option<String>,
 }
@@ -35,6 +41,17 @@ struct Block {
     previous_hash: String,
     hash: String,
 }
+
+// Global
+pub static EXEMPT_FEES_ADDRESSES: Lazy<HashSet<String>> = Lazy::new(|| {
+    vec![
+        "SRKS_genesis".to_string(),
+        "SRKS_treasury".to_string(),
+        "SRKS_sponsorship".to_string(),
+    ]
+    .into_iter()
+    .collect()
+});
 
 /*#[derive(Debug)]
 struct ReferralRegistry {
@@ -71,7 +88,7 @@ impl Block {
 }
 
 // Create a transaction
-fn create_transaction(wallets: &Vec<Wallet>, ledger: &HashMap<String, f64>, sender: &str, recipient: &str, amount: f64,) -> Option<Transaction> {
+fn create_transaction(wallets: &Vec<Wallet>, ledger: &HashMap<String, f64>, sender: &str, recipient: &str, amount: f64, exempt_addresses: &HashSet<String>,) -> Option<Transaction> {
     if !is_valid_address(sender) || !is_valid_address(recipient) {
         println!("Erreur : adresse invalide (doit commencer par 'SRKS_').");
         return None;
@@ -80,13 +97,22 @@ fn create_transaction(wallets: &Vec<Wallet>, ledger: &HashMap<String, f64>, send
     let sender_wallet = find_wallet(wallets, sender);
     let recipient_wallet = find_wallet(wallets, recipient);
 
+    // Calculate fees
+    let fee = if exempt_addresses.contains(sender) {
+        0.0
+    } else {
+        (amount * 0.01).min(1.0)
+    };
+
+    let total = amount + fee;
+
     // Sold out
     if sender != "SRKS_genesis" {
         let balance = ledger.get(sender).unwrap_or(&0.0);
-        if *balance < amount {
+        if *balance < total {
             println!(
-                "Erreur : solde insuffisant. Solde actuel de {} : {}",
-                sender, balance
+                "Erreur : solde insuffisant. Solde actuel de {} : {}, requis : {}",
+                sender, balance, total
             );
             return None;
         }
@@ -94,13 +120,14 @@ fn create_transaction(wallets: &Vec<Wallet>, ledger: &HashMap<String, f64>, send
 
     // It's OK
     if !sender_wallet.is_none() && !recipient_wallet.is_none() {
-        println!("Transaction has been saved");
+        println!("The transaction was successfully completed");
 
         Some(Transaction {
             id: Uuid::new_v4(),
             sender: sender.to_string(),
             recipient: recipient.to_string(),
             amount,
+            fee,
             timestamp: current_timestamp(),
             referrer: sender_wallet?.referrer.clone(),
         })
@@ -115,6 +142,42 @@ fn create_transaction(wallets: &Vec<Wallet>, ledger: &HashMap<String, f64>, send
         }
 
         return None;
+    }
+}
+
+fn distribute_initial_tokens(ledger: &mut Ledger, wallets: &Vec<Wallet>, blockchain: &mut Blockchain) {
+    let genesis = "SRKS_genesis";
+    let distribution = vec![
+        ("SRKS_sponsorship", 10_000_000.0),
+        ("SRKS_treasury", 10_000_000.0),
+    ];
+    let mut transactions = Vec::new();
+
+    for (recipient, amount) in distribution {
+        if let Some(tx) = create_transaction(wallets, ledger, genesis, recipient, amount, &EXEMPT_FEES_ADDRESSES) {
+            apply_transaction(ledger, &tx);
+            transactions.push(tx);
+        }
+    }
+
+    if !transactions.is_empty() {
+        let previous_block = blockchain.last().unwrap();
+        let index = previous_block.index + 1;
+        let timestamp = current_timestamp();
+        let previous_hash = previous_block.hash.clone();
+
+        let block = Block {
+            index,
+            timestamp,
+            previous_hash,
+            transactions: transactions.clone(),
+            hash: String::new(),
+        };
+
+        let mut finalized_block = block;
+        finalized_block.hash = finalized_block.calculate_hash();
+
+        blockchain.push(finalized_block);
     }
 }
 
@@ -177,9 +240,18 @@ fn initialize_ledger_from_blockchain(blockchain: &Vec<Block>) -> HashMap<String,
 fn update_ledger_with_block(ledger: &mut HashMap<String, f64>, block: &Block) {
     for tx in &block.transactions {
         if tx.sender != "SRKS_genesis" {
-            *ledger.entry(tx.sender.clone()).or_insert(0.0) -= tx.amount;
+            *ledger.entry(tx.sender.clone()).or_insert(0.0) -= tx.amount + tx.fee;
         }
         *ledger.entry(tx.recipient.clone()).or_insert(0.0) += tx.amount;
+    }
+}
+
+fn apply_transaction(ledger: &mut HashMap<String, f64>, tx: &Transaction) {
+    let sender_balance = ledger.entry(tx.sender.clone()).or_insert(0.0);
+    if *sender_balance >= tx.amount {
+        *sender_balance -= tx.amount + tx.fee;
+        let recipient_balance = ledger.entry(tx.recipient.clone()).or_insert(0.0);
+        *recipient_balance += tx.amount;
     }
 }
 
@@ -282,6 +354,14 @@ fn main() {
             referrer: None,
         },
         Wallet {
+            address: "SRKS_sponsorship".to_string(),
+            referrer: None,
+        },
+        Wallet {
+            address: "SRKS_treasury".to_string(),
+            referrer: None,
+        },
+        Wallet {
             address: "SRKS_parrain_1".to_string(),
             referrer: None,
         },
@@ -295,13 +375,16 @@ fn main() {
         },
     ];
 
-    // Transaction GENESIS
+    // Create first transactions
     if blockchain.is_empty() {
+
+        // Transaction GENESIS
         let genesis_tx = Transaction {
             id: Uuid::new_v4(),
             sender: "SRKS_genesis".to_string(),
             recipient: "SRKS_genesis".to_string(),
             amount: 100000000.0,
+            fee: 0.0,
             timestamp: current_timestamp(),
             referrer: None,
         };
@@ -309,8 +392,13 @@ fn main() {
         let genesis_block = Block::new(0, vec![genesis_tx], "0".to_string());
         blockchain.push(genesis_block.clone());
         update_ledger_with_block(&mut ledger, &genesis_block);
-        save_blockchain(&blockchain, filename);
         println!("Bloc Genesis : {:?}", genesis_block);
+
+        // Transaction of distribution initial
+        distribute_initial_tokens(&mut ledger, &wallets, &mut blockchain);
+
+        // First block chain save
+        save_blockchain(&blockchain, filename);
     }
 
     // Transaction ask
@@ -329,7 +417,7 @@ fn main() {
                 let recipient = prompt("Destinataire :");
                 let amount: f64 = prompt("Montant :").trim().parse().unwrap_or(0.0);
 
-                if let Some(tx) = create_transaction(&wallets, &ledger, &sender, &recipient, amount) {
+                if let Some(tx) = create_transaction(&wallets, &ledger, &sender, &recipient, amount, &EXEMPT_FEES_ADDRESSES) {
                     let block = Block::new(blockchain.len() as u64, vec![tx], get_latest_hash(&blockchain));
                     update_ledger_with_block(&mut ledger, &block);
                     blockchain.push(block.clone());
