@@ -43,11 +43,21 @@ struct Block {
 }
 
 // Global
+const WALLET_GENESIS : &str = "SRKS_genesis";
+const WALLET_PUBLIC_SALE : &str = "SRKS_public_sale";
+const WALLET_FOUNDER : &str = "SRKS_NeoDev";
+const WALLET_SPONSORSHIP : &str = "SRKS_sponsorship";
+const WALLET_STAKING : &str = "SRKS_staking";
+const WALLET_TREASURY : &str = "SRKS_treasury";
+
 pub static EXEMPT_FEES_ADDRESSES: Lazy<HashSet<String>> = Lazy::new(|| {
     vec![
-        "SRKS_genesis".to_string(),
-        "SRKS_treasury".to_string(),
-        "SRKS_sponsorship".to_string(),
+        WALLET_GENESIS.to_string(),
+        WALLET_PUBLIC_SALE.to_string(),
+        WALLET_FOUNDER.to_string(),
+        WALLET_STAKING.to_string(),
+        WALLET_SPONSORSHIP.to_string(),
+        WALLET_TREASURY.to_string(),
     ]
     .into_iter()
     .collect()
@@ -145,8 +155,30 @@ fn create_transaction(wallets: &Vec<Wallet>, ledger: &HashMap<String, f64>, send
     }
 }
 
+// Fees distribution
+fn distribute_fee(ledger: &mut HashMap<String, f64>, fee: f64, has_referrer: bool, referrer_wallet: Option<&String>,) {
+    let founder_share = fee * 0.40;
+    let treasury_share = fee * 0.30;
+    let staking_share = fee * 0.10;
+    let referral_share = fee * 0.20;
+
+    *ledger.entry(WALLET_FOUNDER.to_string()).or_insert(0.0) += founder_share;
+    *ledger.entry(WALLET_PUBLIC_SALE.to_string()).or_insert(0.0) += treasury_share;
+    *ledger.entry(WALLET_STAKING.to_string()).or_insert(0.0) += staking_share;
+
+    if has_referrer {
+        if let Some(referrer) = referrer_wallet {
+            *ledger.entry(referrer.clone()).or_insert(0.0) += referral_share;
+        } else {
+            *ledger.entry(WALLET_FOUNDER.to_string()).or_insert(0.0) += referral_share;
+        }
+    } else {
+        *ledger.entry(WALLET_FOUNDER.to_string()).or_insert(0.0) += referral_share;
+    }
+}
+
 fn distribute_initial_tokens(ledger: &mut Ledger, wallets: &Vec<Wallet>, blockchain: &mut Blockchain) {
-    let genesis = "SRKS_genesis";
+    let genesis = WALLET_PUBLIC_SALE;
     let distribution = vec![
         ("SRKS_sponsorship", 10_000_000.0),
         ("SRKS_treasury", 10_000_000.0),
@@ -226,10 +258,13 @@ fn initialize_ledger_from_blockchain(blockchain: &Vec<Block>) -> HashMap<String,
     for block in blockchain {
         for tx in &block.transactions {
             if tx.sender != "SRKS_genesis" {
-                *ledger.entry(tx.sender.clone()).or_insert(0.0) -= tx.amount;
+                *ledger.entry(tx.sender.clone()).or_insert(0.0) -= tx.amount + tx.fee;
             }
 
             *ledger.entry(tx.recipient.clone()).or_insert(0.0) += tx.amount;
+
+            let has_referrer = tx.referrer.is_some();
+            distribute_fee(&mut ledger, tx.fee, has_referrer, tx.referrer.as_ref());
         }
     }
 
@@ -243,17 +278,40 @@ fn update_ledger_with_block(ledger: &mut HashMap<String, f64>, block: &Block) {
             *ledger.entry(tx.sender.clone()).or_insert(0.0) -= tx.amount + tx.fee;
         }
         *ledger.entry(tx.recipient.clone()).or_insert(0.0) += tx.amount;
+
+        let has_referrer = tx.referrer.is_some();
+        distribute_fee(ledger, tx.fee, has_referrer, tx.referrer.as_ref());
     }
 }
 
-fn apply_transaction(ledger: &mut HashMap<String, f64>, tx: &Transaction) {
-    let sender_balance = ledger.entry(tx.sender.clone()).or_insert(0.0);
-    if *sender_balance >= tx.amount {
-        *sender_balance -= tx.amount + tx.fee;
-        let recipient_balance = ledger.entry(tx.recipient.clone()).or_insert(0.0);
-        *recipient_balance += tx.amount;
+fn apply_transaction(ledger: &mut Ledger, tx: &Transaction,) -> bool {
+    let sender_balance = ledger.get(&tx.sender).unwrap_or(&0.0);
+    let total = tx.amount + tx.fee;
+
+    if *sender_balance >= total {
+        *ledger.entry(tx.sender.clone()).or_insert(0.0) -= total;
+        *ledger.entry(tx.recipient.clone()).or_insert(0.0) += tx.amount;
+
+        let has_referrer = tx.referrer.is_some();
+        distribute_fee(ledger, tx.fee, has_referrer, tx.referrer.as_ref());
+
+        true
+    } else {
+        false
     }
 }
+
+// fn apply_transaction(ledger: &mut HashMap<String, f64>, tx: &Transaction, has_referrer: bool, referrer_wallet: Option<&String>,) {
+//     let sender_balance = ledger.entry(tx.sender.clone()).or_insert(0.0);
+//
+//     if *sender_balance >= tx.amount + tx.fee {
+//         *sender_balance -= tx.amount + tx.fee;
+//         let recipient_balance = ledger.entry(tx.recipient.clone()).or_insert(0.0);
+//         *recipient_balance += tx.amount;
+//
+//         distribute_fee(ledger, tx.fee, has_referrer, referrer_wallet);
+//     }
+// }
 
 // Referral
 // --------
@@ -350,15 +408,27 @@ fn main() {
     // Create wallets for test
     let wallets = vec![
         Wallet {
-            address: "SRKS_genesis".to_string(),
+            address: WALLET_GENESIS.to_string(),
             referrer: None,
         },
         Wallet {
-            address: "SRKS_sponsorship".to_string(),
+            address: WALLET_PUBLIC_SALE.to_string(),
             referrer: None,
         },
         Wallet {
-            address: "SRKS_treasury".to_string(),
+            address: WALLET_FOUNDER.to_string(),
+            referrer: None,
+        },
+        Wallet {
+            address: WALLET_SPONSORSHIP.to_string(),
+            referrer: None,
+        },
+        Wallet {
+            address: WALLET_TREASURY.to_string(),
+            referrer: None,
+        },
+        Wallet {
+            address: WALLET_STAKING.to_string(),
             referrer: None,
         },
         Wallet {
@@ -381,8 +451,8 @@ fn main() {
         // Transaction GENESIS
         let genesis_tx = Transaction {
             id: Uuid::new_v4(),
-            sender: "SRKS_genesis".to_string(),
-            recipient: "SRKS_genesis".to_string(),
+            sender: WALLET_GENESIS.to_string(),
+            recipient: WALLET_PUBLIC_SALE.to_string(),
             amount: 100000000.0,
             fee: 0.0,
             timestamp: current_timestamp(),
