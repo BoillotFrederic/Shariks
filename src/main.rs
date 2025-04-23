@@ -29,6 +29,7 @@ struct Transaction {
     recipient: String,
     amount: f64,
     fee: f64,
+    fee_rule: FeeRule,
     timestamp: u128,
     referrer: Option<String>,
 }
@@ -40,6 +41,17 @@ struct Block {
     transactions: Vec<Transaction>,
     previous_hash: String,
     hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct FeeRule {
+    rate: f64,
+    max_fee: f64,
+    founder_percentage: f64,
+    treasury_percentage: f64,
+    staking_percentage: f64,
+    referral_percentage: f64,
+    referral_bonus: bool,
 }
 
 // Global
@@ -107,11 +119,22 @@ fn create_transaction(wallets: &Vec<Wallet>, ledger: &HashMap<String, f64>, send
     let sender_wallet = find_wallet(wallets, sender);
     let recipient_wallet = find_wallet(wallets, recipient);
 
+    // Set fees
+    let fee_rule = FeeRule {
+        rate: 0.01,
+        max_fee: 1.0,
+        founder_percentage: 0.40,
+        treasury_percentage: 0.30,
+        staking_percentage: 0.10,
+        referral_percentage: 0.20,
+        referral_bonus: false,
+    };
+
     // Calculate fees
     let fee = if exempt_addresses.contains(sender) {
         0.0
     } else {
-        (amount * 0.01).min(1.0)
+        (amount * fee_rule.rate).min(fee_rule.max_fee)
     };
 
     let total = amount + fee;
@@ -138,6 +161,7 @@ fn create_transaction(wallets: &Vec<Wallet>, ledger: &HashMap<String, f64>, send
             recipient: recipient.to_string(),
             amount,
             fee,
+            fee_rule,
             timestamp: current_timestamp(),
             referrer: sender_wallet?.referrer.clone(),
         })
@@ -156,11 +180,11 @@ fn create_transaction(wallets: &Vec<Wallet>, ledger: &HashMap<String, f64>, send
 }
 
 // Fees distribution
-fn distribute_fee(ledger: &mut HashMap<String, f64>, fee: f64, has_referrer: bool, referrer_wallet: Option<&String>,) {
-    let founder_share = fee * 0.40;
-    let treasury_share = fee * 0.30;
-    let staking_share = fee * 0.10;
-    let referral_share = fee * 0.20;
+fn distribute_fee(ledger: &mut HashMap<String, f64>, fee: f64, fee_rule: FeeRule, has_referrer: bool, referrer_wallet: Option<&String>,) {
+    let founder_share = fee * fee_rule.founder_percentage;
+    let treasury_share = fee * fee_rule.treasury_percentage;
+    let staking_share = fee * fee_rule.staking_percentage;
+    let referral_share = fee * fee_rule.referral_percentage;
 
     *ledger.entry(WALLET_FOUNDER.to_string()).or_insert(0.0) += founder_share;
     *ledger.entry(WALLET_PUBLIC_SALE.to_string()).or_insert(0.0) += treasury_share;
@@ -264,7 +288,7 @@ fn initialize_ledger_from_blockchain(blockchain: &Vec<Block>) -> HashMap<String,
             *ledger.entry(tx.recipient.clone()).or_insert(0.0) += tx.amount;
 
             let has_referrer = tx.referrer.is_some();
-            distribute_fee(&mut ledger, tx.fee, has_referrer, tx.referrer.as_ref());
+            distribute_fee(&mut ledger, tx.fee, tx.fee_rule.clone(), has_referrer, tx.referrer.as_ref());
         }
     }
 
@@ -280,7 +304,7 @@ fn update_ledger_with_block(ledger: &mut HashMap<String, f64>, block: &Block) {
         *ledger.entry(tx.recipient.clone()).or_insert(0.0) += tx.amount;
 
         let has_referrer = tx.referrer.is_some();
-        distribute_fee(ledger, tx.fee, has_referrer, tx.referrer.as_ref());
+        distribute_fee(ledger, tx.fee, tx.fee_rule.clone(), has_referrer, tx.referrer.as_ref());
     }
 }
 
@@ -293,25 +317,13 @@ fn apply_transaction(ledger: &mut Ledger, tx: &Transaction,) -> bool {
         *ledger.entry(tx.recipient.clone()).or_insert(0.0) += tx.amount;
 
         let has_referrer = tx.referrer.is_some();
-        distribute_fee(ledger, tx.fee, has_referrer, tx.referrer.as_ref());
+        distribute_fee(ledger, tx.fee, tx.fee_rule.clone(), has_referrer, tx.referrer.as_ref());
 
         true
     } else {
         false
     }
 }
-
-// fn apply_transaction(ledger: &mut HashMap<String, f64>, tx: &Transaction, has_referrer: bool, referrer_wallet: Option<&String>,) {
-//     let sender_balance = ledger.entry(tx.sender.clone()).or_insert(0.0);
-//
-//     if *sender_balance >= tx.amount + tx.fee {
-//         *sender_balance -= tx.amount + tx.fee;
-//         let recipient_balance = ledger.entry(tx.recipient.clone()).or_insert(0.0);
-//         *recipient_balance += tx.amount;
-//
-//         distribute_fee(ledger, tx.fee, has_referrer, referrer_wallet);
-//     }
-// }
 
 // Referral
 // --------
@@ -375,7 +387,7 @@ fn prompt(text: &str) -> String {
 fn view_balances(ledger: &HashMap<String, f64>) {
     println!("\n--- Soldes des wallets ---");
     for (adresse, solde) in ledger.iter() {
-        println!("{} : {:.2} SRKS", adresse, solde);
+        println!("{} : {:.4} SRKS", adresse, solde);
     }
 }
 
@@ -449,12 +461,23 @@ fn main() {
     if blockchain.is_empty() {
 
         // Transaction GENESIS
+        let fee_rule = FeeRule {
+            rate: 0.0,
+            max_fee: 0.0,
+            founder_percentage: 0.0,
+            treasury_percentage: 0.0,
+            staking_percentage: 0.0,
+            referral_percentage: 0.0,
+            referral_bonus: false,
+        };
+
         let genesis_tx = Transaction {
             id: Uuid::new_v4(),
             sender: WALLET_GENESIS.to_string(),
             recipient: WALLET_PUBLIC_SALE.to_string(),
             amount: 100000000.0,
             fee: 0.0,
+            fee_rule,
             timestamp: current_timestamp(),
             referrer: None,
         };
