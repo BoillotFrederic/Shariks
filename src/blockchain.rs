@@ -2,22 +2,17 @@
 use serde::{Deserialize, Serialize};
 use serde_json;
 use sha2::{Digest, Sha256};
-use uuid::Uuid;
-use std::collections::HashSet;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
-use std::io::{BufReader, BufWriter/*, Write*/};
+use std::io::{BufReader, BufWriter /*, Write*/};
+use uuid::Uuid;
 
 // Crate
 use crate::current_timestamp;
 use crate::wallet::{
-    Wallet,
+    EXEMPT_FEES_ADDRESSES, WALLET_FOUNDER, WALLET_PUBLIC_SALE, WALLET_STAKING, Wallet, find_wallet,
     is_valid_address,
-    find_wallet,
-    WALLET_PUBLIC_SALE,
-    WALLET_FOUNDER,
-    WALLET_STAKING,
-    EXEMPT_FEES_ADDRESSES
 };
 
 // Type
@@ -57,11 +52,13 @@ pub struct FeeRule {
     pub referral_bonus: bool,
 }
 
+// Globals
+pub const NANOSRKS_PER_SRKS: u64 = 1_000_000_000;
+
 // Blockchain
 // ----------
 
 impl Block {
-
     // New block
     pub fn new(index: u64, transactions: Vec<Transaction>, previous_hash: String) -> Self {
         let timestamp = current_timestamp();
@@ -78,7 +75,10 @@ impl Block {
 
     // HASH
     fn calculate_hash(&self) -> String {
-        let data = format!("{}{}{:?}{}", self.index, self.timestamp, self.transactions, self.previous_hash);
+        let data = format!(
+            "{}{}{:?}{}",
+            self.index, self.timestamp, self.transactions, self.previous_hash
+        );
         let mut hasher = Sha256::new();
         hasher.update(data);
         format!("{:x}", hasher.finalize())
@@ -86,7 +86,14 @@ impl Block {
 }
 
 // Create a transaction
-pub fn create_transaction(wallets: &Vec<Wallet>, ledger: &HashMap<String, f64>, sender: &str, recipient: &str, amount: f64, exempt_addresses: &HashSet<String>,) -> Option<Transaction> {
+pub fn create_transaction(
+    wallets: &Vec<Wallet>,
+    ledger: &HashMap<String, f64>,
+    sender: &str,
+    recipient: &str,
+    amount: f64,
+    exempt_addresses: &HashSet<String>,
+) -> Option<Transaction> {
     if !is_valid_address(sender) || !is_valid_address(recipient) {
         println!("Error : invalid address (must start with 'SRKS_').");
         return None;
@@ -156,7 +163,13 @@ pub fn create_transaction(wallets: &Vec<Wallet>, ledger: &HashMap<String, f64>, 
 }
 
 // Fees distribution
-fn distribute_fee(ledger: &mut HashMap<String, f64>, fee: f64, fee_rule: FeeRule, has_referrer: bool, referrer_wallet: Option<&String>,) {
+fn distribute_fee(
+    ledger: &mut HashMap<String, f64>,
+    fee: f64,
+    fee_rule: FeeRule,
+    has_referrer: bool,
+    referrer_wallet: Option<&String>,
+) {
     let founder_share = fee * fee_rule.founder_percentage;
     let treasury_share = fee * fee_rule.treasury_percentage;
     let staking_share = fee * fee_rule.staking_percentage;
@@ -177,7 +190,11 @@ fn distribute_fee(ledger: &mut HashMap<String, f64>, fee: f64, fee_rule: FeeRule
     }
 }
 
-pub fn distribute_initial_tokens(ledger: &mut Ledger, wallets: &Vec<Wallet>, blockchain: &mut Blockchain) {
+pub fn distribute_initial_tokens(
+    ledger: &mut Ledger,
+    wallets: &Vec<Wallet>,
+    blockchain: &mut Blockchain,
+) {
     let genesis = WALLET_PUBLIC_SALE;
     let distribution = vec![
         ("SRKS_sponsorship", 10_000_000.0),
@@ -186,7 +203,14 @@ pub fn distribute_initial_tokens(ledger: &mut Ledger, wallets: &Vec<Wallet>, blo
     let mut transactions = Vec::new();
 
     for (recipient, amount) in distribution {
-        if let Some(tx) = create_transaction(wallets, ledger, genesis, recipient, amount, &EXEMPT_FEES_ADDRESSES) {
+        if let Some(tx) = create_transaction(
+            wallets,
+            ledger,
+            genesis,
+            recipient,
+            amount,
+            &EXEMPT_FEES_ADDRESSES,
+        ) {
             apply_transaction(ledger, &tx);
             transactions.push(tx);
         }
@@ -264,7 +288,13 @@ pub fn initialize_ledger_from_blockchain(blockchain: &Vec<Block>) -> HashMap<Str
             *ledger.entry(tx.recipient.clone()).or_insert(0.0) += tx.amount;
 
             let has_referrer = tx.referrer.is_some();
-            distribute_fee(&mut ledger, tx.fee, tx.fee_rule.clone(), has_referrer, tx.referrer.as_ref());
+            distribute_fee(
+                &mut ledger,
+                tx.fee,
+                tx.fee_rule.clone(),
+                has_referrer,
+                tx.referrer.as_ref(),
+            );
         }
     }
 
@@ -280,11 +310,17 @@ pub fn update_ledger_with_block(ledger: &mut HashMap<String, f64>, block: &Block
         *ledger.entry(tx.recipient.clone()).or_insert(0.0) += tx.amount;
 
         let has_referrer = tx.referrer.is_some();
-        distribute_fee(ledger, tx.fee, tx.fee_rule.clone(), has_referrer, tx.referrer.as_ref());
+        distribute_fee(
+            ledger,
+            tx.fee,
+            tx.fee_rule.clone(),
+            has_referrer,
+            tx.referrer.as_ref(),
+        );
     }
 }
 
-fn apply_transaction(ledger: &mut Ledger, tx: &Transaction,) -> bool {
+fn apply_transaction(ledger: &mut Ledger, tx: &Transaction) -> bool {
     let sender_balance = ledger.get(&tx.sender).unwrap_or(&0.0);
     let total = tx.amount + tx.fee;
 
@@ -293,7 +329,13 @@ fn apply_transaction(ledger: &mut Ledger, tx: &Transaction,) -> bool {
         *ledger.entry(tx.recipient.clone()).or_insert(0.0) += tx.amount;
 
         let has_referrer = tx.referrer.is_some();
-        distribute_fee(ledger, tx.fee, tx.fee_rule.clone(), has_referrer, tx.referrer.as_ref());
+        distribute_fee(
+            ledger,
+            tx.fee,
+            tx.fee_rule.clone(),
+            has_referrer,
+            tx.referrer.as_ref(),
+        );
 
         true
     } else {
@@ -301,13 +343,24 @@ fn apply_transaction(ledger: &mut Ledger, tx: &Transaction,) -> bool {
     }
 }
 
-// Tools
-// -----
+// Helpers
+// -------
+
+pub fn to_nanosrks(srks: f64) -> u64 {
+    (srks * NANOSRKS_PER_SRKS as f64).round() as u64
+}
+
+pub fn to_srks(nanosrks: u64) -> f64 {
+    nanosrks as f64 / NANOSRKS_PER_SRKS as f64
+}
 
 // Get the latest HASH
 pub fn get_latest_hash(blockchain: &Vec<Block>) -> String {
-    if let Some(last_block) = blockchain.last() { last_block.hash.clone() }
-    else { String::from("0") }
+    if let Some(last_block) = blockchain.last() {
+        last_block.hash.clone()
+    } else {
+        String::from("0")
+    }
 }
 
 // View balances
