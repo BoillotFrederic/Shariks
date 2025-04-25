@@ -5,10 +5,10 @@ mod wallet;
 
 // Dependencies
 use blockchain::*;
-use utils::*;
-use wallet::*;
-use uuid::Uuid;
 use std::io;
+use utils::*;
+use uuid::Uuid;
+use wallet::*;
 
 // Main
 fn main() {
@@ -63,15 +63,14 @@ fn main() {
 
     // Create first transactions
     if blockchain.is_empty() {
-
         // Transaction GENESIS
         let fee_rule = FeeRule {
-            rate: 0.0,
-            max_fee: 0.0,
-            founder_percentage: 0.0,
-            treasury_percentage: 0.0,
-            staking_percentage: 0.0,
-            referral_percentage: 0.0,
+            rate: 0,
+            max_fee: 0,
+            founder_percentage: 0,
+            treasury_percentage: 0,
+            staking_percentage: 0,
+            referral_percentage: 0,
             referral_bonus: false,
         };
 
@@ -79,8 +78,8 @@ fn main() {
             id: Uuid::new_v4(),
             sender: WALLET_GENESIS.to_string(),
             recipient: WALLET_PUBLIC_SALE.to_string(),
-            amount: 100000000.0,
-            fee: 0.0,
+            amount: 100_000_000_000_000_000,
+            fee: 0,
             fee_rule,
             timestamp: current_timestamp(),
             referrer: None,
@@ -106,15 +105,29 @@ fn main() {
         println!("4. Save and quit");
 
         let mut choice = String::new();
-        io::stdin().read_line(&mut choice).expect("Error : read line");
+        io::stdin()
+            .read_line(&mut choice)
+            .expect("Error : read line");
         match choice.trim() {
             "1" => {
                 let sender = prompt("Sender :");
                 let recipient = prompt("Recipient :");
-                let amount: f64 = prompt("Amount :").trim().parse().unwrap_or(0.0);
+                let amount: u64 =
+                    prompt("Amount :").trim().parse().unwrap_or(0) * NANOSRKS_PER_SRKS;
 
-                if let Some(tx) = create_transaction(&wallets, &ledger, &sender, &recipient, amount, &EXEMPT_FEES_ADDRESSES) {
-                    let block = Block::new(blockchain.len() as u64, vec![tx], get_latest_hash(&blockchain));
+                if let Some(tx) = create_transaction(
+                    &wallets,
+                    &ledger,
+                    &sender,
+                    &recipient,
+                    amount,
+                    &EXEMPT_FEES_ADDRESSES,
+                ) {
+                    let block = Block::new(
+                        blockchain.len() as u64,
+                        vec![tx],
+                        get_latest_hash(&blockchain),
+                    );
                     update_ledger_with_block(&mut ledger, &block);
                     blockchain.push(block.clone());
                     println!("\nTransaction : {:?}", block);
