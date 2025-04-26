@@ -102,7 +102,8 @@ fn main() {
         println!("1. Add transaction");
         println!("2. View blocks");
         println!("3. View balances");
-        println!("4. Save and quit");
+        println!("4. Check total supply");
+        println!("5. Save and quit");
 
         let mut choice = String::new();
         io::stdin()
@@ -143,6 +144,9 @@ fn main() {
                 view_balances(&ledger);
             }
             "4" => {
+                check_total_supply(&ledger, 100_000_000 * NANOSRKS_PER_SRKS);
+            }
+            "5" => {
                 save_blockchain(&blockchain, filename);
                 println!("Bye !");
                 break;

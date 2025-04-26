@@ -56,6 +56,7 @@ pub struct FeeRule {
 // Globals
 pub const NANOSRKS_PER_SRKS: u64 = 1_000_000_000;
 const PERCENT_BASE: u64 = 100_000;
+const PREFIX_ADDRESS: &str = "SRKS_";
 
 // Blockchain
 // ----------
@@ -125,7 +126,7 @@ pub fn create_transaction(
     let total = amount + fee;
 
     // Sold out
-    if sender != "SRKS_genesis" {
+    if sender != format!("{}{}", PREFIX_ADDRESS, "genesis") {
         let balance = ledger.get(sender).unwrap_or(&0);
         if *balance < total {
             println!(
@@ -172,35 +173,61 @@ fn distribute_fee(
     has_referrer: bool,
     referrer_wallet: Option<&String>,
 ) {
-    let founder_share = fee * (fee_rule.founder_percentage / PERCENT_BASE);
-    let treasury_share = fee * fee_rule.treasury_percentage / PERCENT_BASE;
-    let staking_share = fee * fee_rule.staking_percentage / PERCENT_BASE;
-    let referral_share = fee * fee_rule.referral_percentage / PERCENT_BASE;
+    // Distribution
+    let percentages = [
+        fee_rule.founder_percentage,
+        fee_rule.treasury_percentage,
+        fee_rule.staking_percentage,
+        fee_rule.referral_percentage,
+    ];
 
-    *ledger.entry(WALLET_FOUNDER.to_string()).or_insert(0) += founder_share;
-    *ledger.entry(WALLET_PUBLIC_SALE.to_string()).or_insert(0) += treasury_share;
-    *ledger.entry(WALLET_STAKING.to_string()).or_insert(0) += staking_share;
+    let shares = split_fee_exact(fee, &percentages);
 
+    // Update ledger
+    *ledger.entry(WALLET_FOUNDER.to_string()).or_insert(0) += shares[0];
+    *ledger.entry(WALLET_PUBLIC_SALE.to_string()).or_insert(0) += shares[1];
+    *ledger.entry(WALLET_STAKING.to_string()).or_insert(0) += shares[2];
+
+    // Check referrer
     if has_referrer {
         if let Some(referrer) = referrer_wallet {
-            *ledger.entry(referrer.clone()).or_insert(0) += referral_share;
+            *ledger.entry(referrer.clone()).or_insert(0) += shares[3];
         } else {
-            *ledger.entry(WALLET_FOUNDER.to_string()).or_insert(0) += referral_share;
+            *ledger.entry(WALLET_FOUNDER.to_string()).or_insert(0) += shares[3];
         }
     } else {
-        *ledger.entry(WALLET_FOUNDER.to_string()).or_insert(0) += referral_share;
+        *ledger.entry(WALLET_FOUNDER.to_string()).or_insert(0) += shares[3];
     }
 }
 
+// Adjusting imprecision
+pub fn split_fee_exact(fee: u64, percentages: &[u64]) -> Vec<u64> {
+    let mut shares: Vec<u64> = percentages.iter().map(|p| fee * p / PERCENT_BASE).collect();
+    let total_allocated: u64 = shares.iter().sum();
+    let remainder = fee.saturating_sub(total_allocated);
+
+    if !shares.is_empty() {
+        shares[0] += remainder;
+    }
+
+    shares
+}
+
+// First distribution
 pub fn distribute_initial_tokens(
     ledger: &mut Ledger,
     wallets: &Vec<Wallet>,
     blockchain: &mut Blockchain,
 ) {
-    let genesis = WALLET_PUBLIC_SALE;
     let distribution = vec![
-        ("SRKS_sponsorship", 10_000_000_000_000_000),
-        ("SRKS_treasury", 10_000_000_000_000_000),
+        (
+            format!("{}{}", PREFIX_ADDRESS, "sponsorship"),
+            10_000_000 * NANOSRKS_PER_SRKS,
+        ),
+        (
+            format!("{}{}", PREFIX_ADDRESS, "treasury"),
+            10_000_000 * NANOSRKS_PER_SRKS,
+        ),
     ];
     let mut transactions = Vec::new();
 
@@ -208,8 +235,8 @@ pub fn distribute_initial_tokens(
         if let Some(tx) = create_transaction(
             wallets,
             ledger,
-            genesis,
-            recipient,
+            WALLET_PUBLIC_SALE,
+            &recipient,
             amount,
             &EXEMPT_FEES_ADDRESSES,
         ) {
@@ -236,6 +263,21 @@ pub fn distribute_initial_tokens(
         finalized_block.hash = finalized_block.calculate_hash();
 
         blockchain.push(finalized_block);
+    }
+}
+
+// Check integrity
+pub fn check_total_supply(ledger: &HashMap<String, u64>, expected_total: u64) -> bool {
+    let total: u64 = ledger.values().sum();
+
+    if total == expected_total {
+        println!("Total supply is correct : {}", to_srks(total));
+        true
+    } else {
+        println!("Error : total supply incorrect");
+        println!("Total actuel : {} SRKS", to_srks(total));
+        println!("Total attendu : {} SRKS", to_srks(expected_total));
+        false
     }
 }
 
@@ -283,7 +325,7 @@ pub fn initialize_ledger_from_blockchain(blockchain: &Vec<Block>) -> HashMap<Str
 
     for block in blockchain {
         for tx in &block.transactions {
-            if tx.sender != "SRKS_genesis" {
+            if tx.sender != format!("{}{}", PREFIX_ADDRESS, "genesis") {
                 *ledger.entry(tx.sender.clone()).or_insert(0) -= tx.amount + tx.fee;
             }
 
@@ -305,21 +347,6 @@ pub fn initialize_ledger_from_blockchain(blockchain: &Vec<Block>) -> HashMap<Str
 
 // Update ledger
 pub fn update_ledger_with_block(ledger: &mut HashMap<String, u64>, block: &Block) {
-    // for tx in &block.transactions {
-    //     if tx.sender != "SRKS_genesis" {
-    //         *ledger.entry(tx.sender.clone()).or_insert(0) -= tx.amount + tx.fee;
-    //     }
-    //     *ledger.entry(tx.recipient.clone()).or_insert(0) += tx.amount;
-    //
-    //     let has_referrer = tx.referrer.is_some();
-    //     distribute_fee(
-    //         ledger,
-    //         tx.fee,
-    //         tx.fee_rule.clone(),
-    //         has_referrer,
-    //         tx.referrer.as_ref(),
-    //     );
-    // }
     for tx in &block.transactions {
         if !apply_transaction(ledger, tx) {
             println!("Warning: transaction {:?} failed to apply", tx);
@@ -327,12 +354,16 @@ pub fn update_ledger_with_block(ledger: &mut HashMap<String, u64>, block: &Block
     }
 }
 
+// Apply transaction
 fn apply_transaction(ledger: &mut Ledger, tx: &Transaction) -> bool {
     let sender_balance = ledger.get(&tx.sender).unwrap_or(&0);
     let total = tx.amount + tx.fee;
+    let genesis = format!("{}{}", PREFIX_ADDRESS, "genesis");
 
-    if *sender_balance >= total {
-        *ledger.entry(tx.sender.clone()).or_insert(0) -= total;
+    if *sender_balance >= total || tx.sender == genesis {
+        if tx.sender != genesis {
+            *ledger.entry(tx.sender.clone()).or_insert(0) -= total;
+        }
         *ledger.entry(tx.recipient.clone()).or_insert(0) += tx.amount;
 
         let has_referrer = tx.referrer.is_some();
@@ -353,9 +384,9 @@ fn apply_transaction(ledger: &mut Ledger, tx: &Transaction) -> bool {
 // Helpers
 // -------
 
-pub fn to_nanosrks(srks: f64) -> u64 {
+/*pub fn to_nanosrks(srks: f64) -> u64 {
     (srks * NANOSRKS_PER_SRKS as f64).round() as u64
-}
+}*/
 
 pub fn to_srks(nanosrks: u64) -> f64 {
     nanosrks as f64 / NANOSRKS_PER_SRKS as f64
