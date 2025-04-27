@@ -5,107 +5,85 @@ mod wallet;
 
 // Dependencies
 use blockchain::*;
+use std::collections::HashMap;
 use std::io;
 use utils::*;
 use uuid::Uuid;
 use wallet::*;
 
+// First set
+fn first_set(
+    blockchain: &mut Vec<Block>,
+    ledger: &mut HashMap<String, u64>,
+    wallets: &mut Vec<Wallet>,
+) {
+    // Public sale
+    let public_sale_wallet = create_new_wallet(false, "PUBLIC_SALE".to_string(), "");
+    save_wallet_to_file(&public_sale_wallet, &public_sale_wallet.address);
+
+    // Transaction GENESIS
+    let fee_rule = FeeRule {
+        rate: 0,
+        max_fee: 0,
+        founder_percentage: 0,
+        treasury_percentage: 0,
+        staking_percentage: 0,
+        referral_percentage: 0,
+        referral_bonus: false,
+    };
+
+    let genesis_tx = Transaction {
+        id: Uuid::new_v4(),
+        sender: WALLET_GENESIS.to_string(),
+        recipient: public_sale_wallet.address,
+        amount: 100_000_000_000_000_000,
+        fee: 0,
+        fee_rule,
+        timestamp: current_timestamp(),
+        referrer: "".to_string(),
+    };
+
+    let genesis_block = Block::new(0, vec![genesis_tx], "0".to_string());
+    blockchain.push(genesis_block.clone());
+    update_ledger_with_block(ledger, &genesis_block);
+
+    // Transaction of distribution initial
+    distribute_initial_tokens(ledger, wallets, blockchain);
+
+    // First block chain save
+    save_blockchain(&blockchain);
+}
+
 // Main
 fn main() {
     println!("Initialization start");
 
+    // Load wallets
+    let mut wallets = load_wallets_from_folder("wallets");
+
     // Load bloackchain
-    let filename = "blockchain.json";
-    let mut blockchain = load_blockchain(filename);
+    let mut blockchain = load_blockchain();
 
     // Init ledger
     let mut ledger = initialize_ledger_from_blockchain(&blockchain);
 
-    // Create wallets for test
-    let wallets = vec![
-        Wallet {
-            address: WALLET_GENESIS.to_string(),
-            referrer: None,
-        },
-        Wallet {
-            address: WALLET_PUBLIC_SALE.to_string(),
-            referrer: None,
-        },
-        Wallet {
-            address: WALLET_FOUNDER.to_string(),
-            referrer: None,
-        },
-        Wallet {
-            address: WALLET_SPONSORSHIP.to_string(),
-            referrer: None,
-        },
-        Wallet {
-            address: WALLET_TREASURY.to_string(),
-            referrer: None,
-        },
-        Wallet {
-            address: WALLET_STAKING.to_string(),
-            referrer: None,
-        },
-        Wallet {
-            address: "SRKS_parrain_1".to_string(),
-            referrer: None,
-        },
-        Wallet {
-            address: "SRKS_filleul_1".to_string(),
-            referrer: Some("SRKS_parrain_1".to_string()),
-        },
-        Wallet {
-            address: "SRKS_filleul_2".to_string(),
-            referrer: Some("SRKS_parrain_1".to_string()),
-        },
-    ];
-
     // Create first transactions
     if blockchain.is_empty() {
-        // Transaction GENESIS
-        let fee_rule = FeeRule {
-            rate: 0,
-            max_fee: 0,
-            founder_percentage: 0,
-            treasury_percentage: 0,
-            staking_percentage: 0,
-            referral_percentage: 0,
-            referral_bonus: false,
-        };
-
-        let genesis_tx = Transaction {
-            id: Uuid::new_v4(),
-            sender: WALLET_GENESIS.to_string(),
-            recipient: WALLET_PUBLIC_SALE.to_string(),
-            amount: 100_000_000_000_000_000,
-            fee: 0,
-            fee_rule,
-            timestamp: current_timestamp(),
-            referrer: None,
-        };
-
-        let genesis_block = Block::new(0, vec![genesis_tx], "0".to_string());
-        blockchain.push(genesis_block.clone());
-        update_ledger_with_block(&mut ledger, &genesis_block);
-
-        // Transaction of distribution initial
-        distribute_initial_tokens(&mut ledger, &wallets, &mut blockchain);
-
-        // First block chain save
-        save_blockchain(&blockchain, filename);
+        first_set(&mut blockchain, &mut ledger, &mut wallets);
     }
 
     // Transaction ask
     loop {
         println!("\n--- Menu ---");
         println!("1. Add transaction");
-        println!("2. View blocks");
-        println!("3. View balances");
-        println!("4. Check total supply");
-        println!("5. Save and quit");
+        println!("2. Create a new wallet");
+        println!("3. View blocks");
+        println!("4. View balances");
+        println!("5. Check total supply");
+        println!("6. Save and quit");
 
         let mut choice = String::new();
+        let addresses = EXEMPT_FEES_ADDRESSES.lock().unwrap();
         io::stdin()
             .read_line(&mut choice)
             .expect("Error : read line");
@@ -116,14 +94,9 @@ fn main() {
                 let amount: u64 =
                     prompt("Amount :").trim().parse().unwrap_or(0) * NANOSRKS_PER_SRKS;
 
-                if let Some(tx) = create_transaction(
-                    &wallets,
-                    &ledger,
-                    &sender,
-                    &recipient,
-                    amount,
-                    &EXEMPT_FEES_ADDRESSES,
-                ) {
+                if let Some(tx) =
+                    create_transaction(&wallets, &ledger, &sender, &recipient, amount, &addresses)
+                {
                     let block = Block::new(
                         blockchain.len() as u64,
                         vec![tx],
@@ -135,19 +108,31 @@ fn main() {
                 }
             }
             "2" => {
+                let referrer = prompt("Godfather :");
+                let found = find_wallet(&wallets, &referrer).is_none();
+
+                if !found || referrer.is_empty() {
+                    let new_wallet =
+                        create_new_wallet(found, "".to_string(), &referrer.to_string().trim());
+                    save_wallet_to_file(&new_wallet, &new_wallet.address);
+                } else {
+                    println!("Error : the sponsor {} is not a known wallet", referrer);
+                }
+            }
+            "3" => {
                 for block in &blockchain {
                     println!("\n Block n°{} :", block.index);
                     println!("{:#?}", block);
                 }
             }
-            "3" => {
+            "4" => {
                 view_balances(&ledger);
             }
-            "4" => {
+            "5" => {
                 check_total_supply(&ledger, 100_000_000 * NANOSRKS_PER_SRKS);
             }
-            "5" => {
-                save_blockchain(&blockchain, filename);
+            "6" => {
+                save_blockchain(&blockchain);
                 println!("Bye !");
                 break;
             }

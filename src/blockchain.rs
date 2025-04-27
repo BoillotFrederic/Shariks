@@ -5,15 +5,15 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
-use std::io::{BufReader, BufWriter /*, Write*/};
+use std::io::{BufReader, BufWriter};
 use uuid::Uuid;
 
 // Crate
 use crate::current_timestamp;
 use crate::trim_trailing_zeros;
 use crate::wallet::{
-    EXEMPT_FEES_ADDRESSES, WALLET_FOUNDER, WALLET_PUBLIC_SALE, WALLET_STAKING, Wallet, find_wallet,
-    is_valid_address,
+    EXEMPT_FEES_ADDRESSES, Wallet, create_new_wallet, find_wallet, is_valid_address,
+    load_wallet_owner, save_wallet_to_file,
 };
 
 // Type
@@ -30,7 +30,7 @@ pub struct Transaction {
     pub fee: u64,
     pub fee_rule: FeeRule,
     pub timestamp: u128,
-    pub referrer: Option<String>,
+    pub referrer: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -149,7 +149,7 @@ pub fn create_transaction(
             fee,
             fee_rule,
             timestamp: current_timestamp(),
-            referrer: sender_wallet?.referrer.clone(),
+            referrer: sender_wallet?.referrer,
         })
     }
     // Address not found
@@ -171,8 +171,13 @@ fn distribute_fee(
     fee: u64,
     fee_rule: FeeRule,
     has_referrer: bool,
-    referrer_wallet: Option<&String>,
+    referrer_wallet: String,
 ) {
+    // Stop if no fee
+    if fee == 0 {
+        return;
+    }
+
     // Distribution
     let percentages = [
         fee_rule.founder_percentage,
@@ -183,20 +188,28 @@ fn distribute_fee(
 
     let shares = split_fee_exact(fee, &percentages);
 
+    // Get wallets
+    let public_sale_wallet = load_wallet_owner(format!("first_set\\{}", "PUBLIC_SALE"));
+    let founder_wallet = load_wallet_owner(format!("first_set\\{}", "FOUNDER"));
+    let staking_wallet = load_wallet_owner(format!("first_set\\{}", "STAKING"));
+    let public_sale_address = format!("{}{}", PREFIX_ADDRESS, public_sale_wallet.public_key);
+    let founder_address = format!("{}{}", PREFIX_ADDRESS, founder_wallet.public_key);
+    let staking_address = format!("{}{}", PREFIX_ADDRESS, staking_wallet.public_key);
+
     // Update ledger
-    *ledger.entry(WALLET_FOUNDER.to_string()).or_insert(0) += shares[0];
-    *ledger.entry(WALLET_PUBLIC_SALE.to_string()).or_insert(0) += shares[1];
-    *ledger.entry(WALLET_STAKING.to_string()).or_insert(0) += shares[2];
+    *ledger.entry(founder_address.clone()).or_insert(0) += shares[0];
+    *ledger.entry(public_sale_address).or_insert(0) += shares[1];
+    *ledger.entry(staking_address).or_insert(0) += shares[2];
 
     // Check referrer
     if has_referrer {
-        if let Some(referrer) = referrer_wallet {
-            *ledger.entry(referrer.clone()).or_insert(0) += shares[3];
+        if !referrer_wallet.is_empty() {
+            *ledger.entry(referrer_wallet.to_string()).or_insert(0) += shares[3];
         } else {
-            *ledger.entry(WALLET_FOUNDER.to_string()).or_insert(0) += shares[3];
+            *ledger.entry(founder_address).or_insert(0) += shares[3];
         }
     } else {
-        *ledger.entry(WALLET_FOUNDER.to_string()).or_insert(0) += shares[3];
+        *ledger.entry(founder_address).or_insert(0) += shares[3];
     }
 }
 
@@ -216,16 +229,77 @@ pub fn split_fee_exact(fee: u64, percentages: &[u64]) -> Vec<u64> {
 // First distribution
 pub fn distribute_initial_tokens(
     ledger: &mut Ledger,
-    wallets: &Vec<Wallet>,
+    wallets: &mut Vec<Wallet>,
     blockchain: &mut Blockchain,
 ) {
+    // Public sale
+    let public_sale_wallet = load_wallet_owner(format!("first_set\\{}", "PUBLIC_SALE"));
+    let local_sale_wallet = Wallet {
+        address: format!("SRKS_{}", public_sale_wallet.public_key.to_string()),
+        referrer: "".to_string(),
+        first_referrer: false,
+    };
+
+    // Create founder wallet
+    let founder_wallet = create_new_wallet(false, "FOUNDER".to_string(), "");
+    save_wallet_to_file(&founder_wallet, &founder_wallet.address);
+    let _founder_wallet = load_wallet_owner(format!("first_set\\{}", "FOUNDER"));
+    let local_founder_wallet = Wallet {
+        address: format!("SRKS_{}", _founder_wallet.public_key.to_string()),
+        referrer: "".to_string(),
+        first_referrer: false,
+    };
+
+    // Create sponsorship wallet
+    let sponsorship_wallet = create_new_wallet(false, "SPONSORSHIP".to_string(), "");
+    save_wallet_to_file(&sponsorship_wallet, &sponsorship_wallet.address);
+    let _sponsorship_wallet = load_wallet_owner(format!("first_set\\{}", "SPONSORSHIP"));
+    let local_wallet_sponsorship = Wallet {
+        address: format!("SRKS_{}", _sponsorship_wallet.public_key.to_string()),
+        referrer: "".to_string(),
+        first_referrer: false,
+    };
+
+    // Create treasury wallet
+    let treasury_wallet = create_new_wallet(false, "TREASURY".to_string(), "");
+    save_wallet_to_file(&treasury_wallet, &treasury_wallet.address);
+    let _treasury_wallet = load_wallet_owner(format!("first_set\\{}", "TREASURY"));
+    let local_wallet_treasury = Wallet {
+        address: format!("SRKS_{}", _treasury_wallet.public_key.to_string()),
+        referrer: "".to_string(),
+        first_referrer: false,
+    };
+
+    // Create staking wallet
+    let staking_wallet = create_new_wallet(false, "STAKING".to_string(), "");
+    save_wallet_to_file(&staking_wallet, &staking_wallet.address);
+    let _staking_wallet = load_wallet_owner(format!("first_set\\{}", "STAKING"));
+    let local_staking_wallet = Wallet {
+        address: format!("SRKS_{}", _staking_wallet.public_key.to_string()),
+        referrer: "".to_string(),
+        first_referrer: false,
+    };
+
+    let mut addresses = EXEMPT_FEES_ADDRESSES.lock().unwrap();
+    addresses.insert(local_sale_wallet.clone().address);
+    addresses.insert(local_founder_wallet.clone().address);
+    addresses.insert(local_wallet_sponsorship.clone().address);
+    addresses.insert(local_staking_wallet.clone().address);
+    addresses.insert(local_wallet_treasury.clone().address);
+
+    wallets.push(local_sale_wallet);
+    wallets.push(local_founder_wallet);
+    wallets.push(local_wallet_sponsorship);
+    wallets.push(local_staking_wallet);
+    wallets.push(local_wallet_treasury);
+
     let distribution = vec![
         (
-            format!("{}{}", PREFIX_ADDRESS, "sponsorship"),
+            format!("SRKS_{}", _sponsorship_wallet.public_key),
             10_000_000 * NANOSRKS_PER_SRKS,
         ),
         (
-            format!("{}{}", PREFIX_ADDRESS, "treasury"),
+            format!("SRKS_{}", _treasury_wallet.public_key),
             10_000_000 * NANOSRKS_PER_SRKS,
         ),
     ];
@@ -235,10 +309,10 @@ pub fn distribute_initial_tokens(
         if let Some(tx) = create_transaction(
             wallets,
             ledger,
-            WALLET_PUBLIC_SALE,
+            &format!("SRKS_{}", public_sale_wallet.public_key),
             &recipient,
             amount,
-            &EXEMPT_FEES_ADDRESSES,
+            &addresses,
         ) {
             apply_transaction(ledger, &tx);
             transactions.push(tx);
@@ -282,22 +356,22 @@ pub fn check_total_supply(ledger: &HashMap<String, u64>, expected_total: u64) ->
 }
 
 // Save blockchain
-pub fn save_blockchain(blockchain: &Vec<Block>, filename: &str) {
+pub fn save_blockchain(blockchain: &Vec<Block>) {
     let file = OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(true)
-        .open(filename)
+        .open("blockchain.json")
         .expect("Error : unable to open output file");
 
     let writer = BufWriter::new(file);
     serde_json::to_writer_pretty(writer, &blockchain).expect("Error : serializing blockchain");
-    println!("Blockchain saved in '{}'", filename);
+    println!("Blockchain saved in '{}'", "blockchain.json");
 }
 
 // Load blockchain
-pub fn load_blockchain(filename: &str) -> Vec<Block> {
-    let file = File::open(filename);
+pub fn load_blockchain() -> Vec<Block> {
+    let file = File::open("blockchain.json");
 
     match file {
         Ok(f) => {
@@ -306,7 +380,7 @@ pub fn load_blockchain(filename: &str) -> Vec<Block> {
                 println!("Error : corrupt or empty file, initializing a new string");
                 vec![]
             });
-            println!("Blockchain loaded from '{}'", filename);
+            println!("Blockchain loaded from '{}'", "blockchain.json");
             blockchain
         }
         Err(_) => {
@@ -331,13 +405,13 @@ pub fn initialize_ledger_from_blockchain(blockchain: &Vec<Block>) -> HashMap<Str
 
             *ledger.entry(tx.recipient.clone()).or_insert(0) += tx.amount;
 
-            let has_referrer = tx.referrer.is_some();
+            //let has_referrer = tx.referrer.is_some();
             distribute_fee(
                 &mut ledger,
                 tx.fee,
                 tx.fee_rule.clone(),
-                has_referrer,
-                tx.referrer.as_ref(),
+                /*has_referrer*/ !tx.referrer.is_empty(),
+                tx.referrer.to_string(), //tx.referrer.as_ref(),
             );
         }
     }
@@ -366,13 +440,13 @@ fn apply_transaction(ledger: &mut Ledger, tx: &Transaction) -> bool {
         }
         *ledger.entry(tx.recipient.clone()).or_insert(0) += tx.amount;
 
-        let has_referrer = tx.referrer.is_some();
+        //let has_referrer = tx.referrer.is_some();
         distribute_fee(
             ledger,
             tx.fee,
             tx.fee_rule.clone(),
-            has_referrer,
-            tx.referrer.as_ref(),
+            /*has_referrer*/ !tx.referrer.is_empty(),
+            tx.referrer.to_string(), //tx.referrer.as_ref(),
         );
 
         true

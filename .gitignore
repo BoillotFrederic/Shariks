@@ -18,6 +18,13 @@ Thumbs.db
 # Cargo files
 Cargo.lock
 
+# First set
+/first_set/
+
+# Wallet
+/referrer_counter/
+/wallets/
+
 # Blockchain
 blockchain.json
 
