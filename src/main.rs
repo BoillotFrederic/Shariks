@@ -18,8 +18,8 @@ fn first_set(
     wallets: &mut Vec<Wallet>,
 ) {
     // Public sale
-    let public_sale_wallet = create_new_wallet(false, "PUBLIC_SALE".to_string(), "");
-    save_wallet_to_file(&public_sale_wallet, &public_sale_wallet.address);
+    let public_sale_wallet = create_new_wallet(false, &"PUBLIC_SALE".to_string(), "");
+    wallets.push(public_sale_wallet.clone());
 
     // Transaction GENESIS
     let fee_rule = FeeRule {
@@ -112,9 +112,7 @@ fn main() {
                 let found = find_wallet(&wallets, &referrer).is_none();
 
                 if !found || referrer.is_empty() {
-                    let new_wallet =
-                        create_new_wallet(found, "".to_string(), &referrer.to_string().trim());
-                    save_wallet_to_file(&new_wallet, &new_wallet.address);
+                    wallets.push(create_new_wallet(found, "", &referrer.to_string().trim()));
                 } else {
                     println!("Error : the sponsor {} is not a known wallet", referrer);
                 }

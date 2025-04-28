@@ -12,8 +12,8 @@ use uuid::Uuid;
 use crate::current_timestamp;
 use crate::trim_trailing_zeros;
 use crate::wallet::{
-    EXEMPT_FEES_ADDRESSES, Wallet, create_new_wallet, find_wallet, is_valid_address,
-    load_wallet_owner, save_wallet_to_file,
+    EXEMPT_FEES_ADDRESSES, Wallet, create_new_wallet, find_wallet, get_owner_address_wallet,
+    is_valid_address, load_wallet_owner,
 };
 
 // Type
@@ -56,7 +56,7 @@ pub struct FeeRule {
 // Globals
 pub const NANOSRKS_PER_SRKS: u64 = 1_000_000_000;
 const PERCENT_BASE: u64 = 100_000;
-const PREFIX_ADDRESS: &str = "SRKS_";
+pub const PREFIX_ADDRESS: &str = "SRKS_";
 
 // Blockchain
 // ----------
@@ -105,40 +105,40 @@ pub fn create_transaction(
     let sender_wallet = find_wallet(wallets, sender);
     let recipient_wallet = find_wallet(wallets, recipient);
 
-    // Set fees
-    let fee_rule = FeeRule {
-        rate: 1_000_u64,
-        max_fee: 1 * NANOSRKS_PER_SRKS,
-        founder_percentage: 40_000_u64,
-        treasury_percentage: 30_000_u64,
-        staking_percentage: 10_000_u64,
-        referral_percentage: 20_000_u64,
-        referral_bonus: false,
-    };
-
-    // Calculate fees
-    let fee = if exempt_addresses.contains(sender) {
-        0
-    } else {
-        (amount * fee_rule.rate / PERCENT_BASE).min(fee_rule.max_fee)
-    };
-
-    let total = amount + fee;
-
-    // Sold out
-    if sender != format!("{}{}", PREFIX_ADDRESS, "genesis") {
-        let balance = ledger.get(sender).unwrap_or(&0);
-        if *balance < total {
-            println!(
-                "Error : not enough tokens. current number of tokens {} : {}, required : {}",
-                sender, balance, total
-            );
-            return None;
-        }
-    }
-
-    // It's OK
+    // Sender autorization
     if !sender_wallet.is_none() && !recipient_wallet.is_none() {
+        // Set fees
+        let fee_rule = FeeRule {
+            rate: 1_000_u64,
+            max_fee: 1 * NANOSRKS_PER_SRKS,
+            founder_percentage: 40_000_u64,
+            treasury_percentage: 30_000_u64,
+            staking_percentage: 10_000_u64,
+            referral_percentage: 20_000_u64,
+            referral_bonus: false,
+        };
+
+        // Calculate fees
+        let fee = if exempt_addresses.contains(sender) {
+            0
+        } else {
+            (amount * fee_rule.rate / PERCENT_BASE).min(fee_rule.max_fee)
+        };
+
+        let total = amount + fee;
+
+        // Sold out
+        if sender != format!("{}{}", PREFIX_ADDRESS, "genesis") {
+            let balance = ledger.get(sender).unwrap_or(&0);
+            if *balance < total {
+                println!(
+                    "Error : not enough tokens. current number of tokens {} : {}, required : {}",
+                    sender, balance, total
+                );
+                return None;
+            }
+        }
+
         println!("The transaction was successfully completed");
 
         Some(Transaction {
@@ -232,87 +232,47 @@ pub fn distribute_initial_tokens(
     wallets: &mut Vec<Wallet>,
     blockchain: &mut Blockchain,
 ) {
+    // Exempt addresses
+    let mut exempt_addresses = EXEMPT_FEES_ADDRESSES.lock().unwrap();
+
     // Public sale
-    let public_sale_wallet = load_wallet_owner(format!("first_set\\{}", "PUBLIC_SALE"));
-    let local_sale_wallet = Wallet {
-        address: format!("SRKS_{}", public_sale_wallet.public_key.to_string()),
-        referrer: "".to_string(),
-        first_referrer: false,
-    };
+    let public_sale_address = get_owner_address_wallet("PUBLIC_SALE".to_string());
+    let public_sale_wallet = find_wallet(wallets, &public_sale_address);
 
-    // Create founder wallet
-    let founder_wallet = create_new_wallet(false, "FOUNDER".to_string(), "");
-    save_wallet_to_file(&founder_wallet, &founder_wallet.address);
-    let _founder_wallet = load_wallet_owner(format!("first_set\\{}", "FOUNDER"));
-    let local_founder_wallet = Wallet {
-        address: format!("SRKS_{}", _founder_wallet.public_key.to_string()),
-        referrer: "".to_string(),
-        first_referrer: false,
-    };
+    if let Some(wallet) = public_sale_wallet {
+        exempt_addresses.insert(wallet.address.clone());
+    }
 
-    // Create sponsorship wallet
-    let sponsorship_wallet = create_new_wallet(false, "SPONSORSHIP".to_string(), "");
-    save_wallet_to_file(&sponsorship_wallet, &sponsorship_wallet.address);
-    let _sponsorship_wallet = load_wallet_owner(format!("first_set\\{}", "SPONSORSHIP"));
-    let local_wallet_sponsorship = Wallet {
-        address: format!("SRKS_{}", _sponsorship_wallet.public_key.to_string()),
-        referrer: "".to_string(),
-        first_referrer: false,
-    };
+    // Wallets to be created
+    let wallet_names = vec!["FOUNDER", "SPONSORSHIP", "TREASURY", "STAKING"];
 
-    // Create treasury wallet
-    let treasury_wallet = create_new_wallet(false, "TREASURY".to_string(), "");
-    save_wallet_to_file(&treasury_wallet, &treasury_wallet.address);
-    let _treasury_wallet = load_wallet_owner(format!("first_set\\{}", "TREASURY"));
-    let local_wallet_treasury = Wallet {
-        address: format!("SRKS_{}", _treasury_wallet.public_key.to_string()),
-        referrer: "".to_string(),
-        first_referrer: false,
-    };
-
-    // Create staking wallet
-    let staking_wallet = create_new_wallet(false, "STAKING".to_string(), "");
-    save_wallet_to_file(&staking_wallet, &staking_wallet.address);
-    let _staking_wallet = load_wallet_owner(format!("first_set\\{}", "STAKING"));
-    let local_staking_wallet = Wallet {
-        address: format!("SRKS_{}", _staking_wallet.public_key.to_string()),
-        referrer: "".to_string(),
-        first_referrer: false,
-    };
-
-    let mut addresses = EXEMPT_FEES_ADDRESSES.lock().unwrap();
-    addresses.insert(local_sale_wallet.clone().address);
-    addresses.insert(local_founder_wallet.clone().address);
-    addresses.insert(local_wallet_sponsorship.clone().address);
-    addresses.insert(local_staking_wallet.clone().address);
-    addresses.insert(local_wallet_treasury.clone().address);
-
-    wallets.push(local_sale_wallet);
-    wallets.push(local_founder_wallet);
-    wallets.push(local_wallet_sponsorship);
-    wallets.push(local_staking_wallet);
-    wallets.push(local_wallet_treasury);
+    for wallet_name in wallet_names.iter() {
+        let wallet = create_new_wallet(false, wallet_name, "");
+        wallets.push(wallet.clone());
+        exempt_addresses.insert(wallet.address.clone());
+    }
 
     let distribution = vec![
         (
-            format!("SRKS_{}", _sponsorship_wallet.public_key),
+            get_owner_address_wallet("SPONSORSHIP".to_string()),
             10_000_000 * NANOSRKS_PER_SRKS,
         ),
         (
-            format!("SRKS_{}", _treasury_wallet.public_key),
+            get_owner_address_wallet("TREASURY".to_string()),
             10_000_000 * NANOSRKS_PER_SRKS,
         ),
     ];
+
     let mut transactions = Vec::new();
 
     for (recipient, amount) in distribution {
         if let Some(tx) = create_transaction(
             wallets,
             ledger,
-            &format!("SRKS_{}", public_sale_wallet.public_key),
+            &public_sale_address,
             &recipient,
             amount,
-            &addresses,
+            &exempt_addresses,
         ) {
             apply_transaction(ledger, &tx);
             transactions.push(tx);
