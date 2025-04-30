@@ -13,7 +13,8 @@ use crate::current_timestamp;
 use crate::trim_trailing_zeros;
 use crate::wallet::{
     EXEMPT_FEES_ADDRESSES, Wallet, create_new_wallet, find_wallet, get_owner_address_wallet,
-    is_valid_address, load_wallet_owner,
+    get_owner_privatekey_wallet, is_valid_address, load_wallet_owner, sign_transaction,
+    verify_signature,
 };
 
 // Type
@@ -30,6 +31,7 @@ pub struct Transaction {
     pub fee: u64,
     pub fee_rule: FeeRule,
     pub timestamp: u128,
+    pub signature: String,
     pub referrer: String,
 }
 
@@ -96,17 +98,32 @@ pub fn create_transaction(
     recipient: &str,
     amount: u64,
     exempt_addresses: &HashSet<String>,
+    signature: &str,
 ) -> Option<Transaction> {
-    if !is_valid_address(sender) || !is_valid_address(recipient) {
-        println!("Error : invalid address (must start with 'SRKS_').");
-        return None;
-    }
-
+    // Get wallets
     let sender_wallet = find_wallet(wallets, sender);
     let recipient_wallet = find_wallet(wallets, recipient);
 
-    // Sender autorization
-    if !sender_wallet.is_none() && !recipient_wallet.is_none() {
+    // Get errors
+    let err_invalid_prefix_sender = !is_valid_address(sender);
+    let err_invalid_prefix_recipient = !is_valid_address(recipient);
+    let err_sender_wallet_not_found = sender_wallet.is_none();
+    let err_recipient_wallet_not_found = recipient_wallet.is_none();
+    let err_invalid_signature = if let Some(wallet) = &sender_wallet {
+        let public_key = wallet.address.strip_prefix("SRKS_").unwrap_or("");
+        let message = format!("{}:{}:{}", sender, recipient, amount);
+        !verify_signature(public_key, &message, signature)
+    } else {
+        true
+    };
+
+    // If valid transaction
+    if !err_invalid_prefix_sender
+        && !err_invalid_prefix_recipient
+        && !err_sender_wallet_not_found
+        && !err_recipient_wallet_not_found
+        && !err_invalid_signature
+    {
         // Set fees
         let fee_rule = FeeRule {
             rate: 1_000_u64,
@@ -149,16 +166,26 @@ pub fn create_transaction(
             fee,
             fee_rule,
             timestamp: current_timestamp(),
+            signature: signature.to_string(),
             referrer: sender_wallet?.referrer,
         })
     }
-    // Address not found
+    // Show errors
     else {
-        if sender_wallet.is_none() {
+        if err_invalid_prefix_sender {
+            println!("Error : invalid sender address (must start with 'SRKS_')");
+        }
+        if err_invalid_prefix_recipient {
+            println!("Error : invalid recipient address (must start with 'SRKS_')");
+        }
+        if err_sender_wallet_not_found {
             println!("Error : sender ({}) not found", sender);
         }
-        if recipient_wallet.is_none() {
+        if err_recipient_wallet_not_found {
             println!("Error : recipient ({}) not found", recipient);
+        }
+        if err_invalid_signature {
+            println!("Error : invalid signature");
         }
 
         return None;
@@ -237,6 +264,7 @@ pub fn distribute_initial_tokens(
 
     // Public sale
     let public_sale_address = get_owner_address_wallet("PUBLIC_SALE".to_string());
+    let public_sale_private_key = get_owner_privatekey_wallet("PUBLIC_SALE".to_string());
     let public_sale_wallet = find_wallet(wallets, &public_sale_address);
 
     if let Some(wallet) = public_sale_wallet {
@@ -266,6 +294,15 @@ pub fn distribute_initial_tokens(
     let mut transactions = Vec::new();
 
     for (recipient, amount) in distribution {
+        // Signature
+        let signature = sign_transaction(
+            public_sale_private_key.to_string(),
+            public_sale_address.clone(),
+            recipient.clone(),
+            amount,
+        );
+
+        // Transaction
         if let Some(tx) = create_transaction(
             wallets,
             ledger,
@@ -273,6 +310,7 @@ pub fn distribute_initial_tokens(
             &recipient,
             amount,
             &exempt_addresses,
+            &signature,
         ) {
             apply_transaction(ledger, &tx);
             transactions.push(tx);

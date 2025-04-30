@@ -1,11 +1,13 @@
 // Dependencies
 use bip39::Mnemonic;
-use ed25519_dalek::{SigningKey, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use hex;
 use once_cell::sync::Lazy;
 //use rand::rngs::OsRng;
+//use base64::decode;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::convert::TryInto;
 use std::fs;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
@@ -62,22 +64,78 @@ pub fn generate_keypair_from_mnemonic() -> (SigningKey, VerifyingKey) {
 }
 
 // Restore key pair from mnemonic
-pub fn restore_keypair_from_mnemonic(mnemonic_phrase: &str) -> (SigningKey, VerifyingKey) {
-    let mnemonic = Mnemonic::parse(mnemonic_phrase).expect("Error: invalid mnemonic phrase");
+// pub fn restore_keypair_from_mnemonic(mnemonic_phrase: &str) -> (SigningKey, VerifyingKey) {
+//     let mnemonic = Mnemonic::parse(mnemonic_phrase).expect("Error: invalid mnemonic phrase");
+//
+//     let seed = mnemonic.to_seed("");
+//     let seed_32: &[u8; 32] = seed
+//         .get(..32)
+//         .and_then(|slice| slice.try_into().ok())
+//         .expect("Error: seed must have at least 32 bytes");
+//
+//     let signing_key = SigningKey::from_bytes(seed_32);
+//     let verifying_key = signing_key.verifying_key();
+//
+//     (signing_key, verifying_key)
+// }
 
-    let seed = mnemonic.to_seed("");
-    let seed_32: &[u8; 32] = seed
-        .get(..32)
-        .and_then(|slice| slice.try_into().ok())
-        .expect("Error: seed must have at least 32 bytes");
+// Sign transaction
+pub fn sign_transaction(
+    private_key: String,
+    sender: String,
+    recipient: String,
+    amount: u64,
+) -> String {
+    // Errors
+    let key_bytes = match hex::decode(private_key.trim()) {
+        Ok(bytes) => bytes,
+        Err(_) => return String::new(),
+    };
 
-    let signing_key = SigningKey::from_bytes(seed_32);
-    let verifying_key = signing_key.verifying_key();
+    let key_array: [u8; 32] = match key_bytes.try_into() {
+        Ok(array) => array,
+        Err(_) => return String::new(),
+    };
 
-    (signing_key, verifying_key)
+    // Sign
+    let signing_key = SigningKey::from_bytes(&key_array);
+    let message = format!("{}:{}:{}", sender, recipient, amount);
+    let signature: Signature = signing_key.sign(message.as_bytes());
+    hex::encode(signature.to_bytes())
 }
 
+// Verify signature
+pub fn verify_signature(public_key_hex: &str, message: &str, signature_hex: &str) -> bool {
+    // Erros
+    let public_key_bytes = match hex::decode(public_key_hex) {
+        Ok(bytes) => bytes,
+        Err(_) => return false,
+    };
+    let public_key_array: [u8; 32] = match public_key_bytes.try_into() {
+        Ok(array) => array,
+        Err(_) => return false,
+    };
+    let verifying_key = match VerifyingKey::from_bytes(&public_key_array) {
+        Ok(key) => key,
+        Err(_) => return false,
+    };
+    let signature_bytes = match hex::decode(signature_hex) {
+        Ok(bytes) => bytes,
+        Err(_) => return false,
+    };
+    let signature_array: [u8; 64] = match signature_bytes.try_into() {
+        Ok(array) => array,
+        Err(_) => return false,
+    };
+
+    // Check the signature
+    let signature = Signature::from_bytes(&signature_array);
+    verifying_key.verify(message.as_bytes(), &signature).is_ok()
+}
+
+// Create a new wallet
 pub fn create_new_wallet(referrer_found: bool, save_private_key: &str, referrer: &str) -> Wallet {
+    // Generate
     pub fn generate(referrer_found: bool, save_private_key: String, referrer: &str) -> Wallet {
         let (signing_key, verifying_key) = generate_keypair_from_mnemonic();
 
@@ -178,6 +236,11 @@ pub fn get_owner_address_wallet(name: String) -> String {
         PREFIX_ADDRESS,
         load_wallet_owner(format!("{}{}", path, name)).public_key
     );
+}
+
+pub fn get_owner_privatekey_wallet(name: String) -> String {
+    let path = "first_set\\";
+    return load_wallet_owner(format!("{}{}", path, name)).private_key;
 }
 
 // Find a wallet

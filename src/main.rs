@@ -41,6 +41,7 @@ fn first_set(
         fee_rule,
         timestamp: current_timestamp(),
         referrer: "".to_string(),
+        signature: "".to_string(),
     };
 
     let genesis_block = Block::new(0, vec![genesis_tx], "0".to_string());
@@ -93,10 +94,14 @@ fn main() {
                 let recipient = prompt("Recipient :");
                 let amount: u64 =
                     prompt("Amount :").trim().parse().unwrap_or(0) * NANOSRKS_PER_SRKS;
+                let private_key = prompt("Private key :");
 
-                if let Some(tx) =
-                    create_transaction(&wallets, &ledger, &sender, &recipient, amount, &addresses)
-                {
+                let signature =
+                    sign_transaction(private_key, sender.clone(), recipient.clone(), amount);
+
+                if let Some(tx) = create_transaction(
+                    &wallets, &ledger, &sender, &recipient, amount, &addresses, &signature,
+                ) {
                     let block = Block::new(
                         blockchain.len() as u64,
                         vec![tx],
