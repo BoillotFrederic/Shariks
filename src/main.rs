@@ -48,6 +48,9 @@ fn first_set(
     // Transaction of distribution initial
     distribute_initial_tokens(ledger, wallets, blockchain);
 
+    // Save exempt addresses
+    save_exempt_addresses_to_file();
+
     // First block chain save
     save_blockchain(&blockchain);
 }
@@ -83,7 +86,7 @@ fn main() {
         println!("8. Save and quit");
 
         let mut choice = String::new();
-        let addresses = EXEMPT_FEES_ADDRESSES.lock().unwrap();
+        let exempt_fees_addresses = load_exempt_addresses_from_file();
         io::stdin()
             .read_line(&mut choice)
             .expect("Error : read line");
@@ -99,7 +102,13 @@ fn main() {
                     sign_transaction(private_key, sender.clone(), recipient.clone(), amount);
 
                 if let Some(tx) = create_transaction(
-                    &wallets, &ledger, &sender, &recipient, amount, &addresses, &signature,
+                    &wallets,
+                    &ledger,
+                    &sender,
+                    &recipient,
+                    amount,
+                    &exempt_fees_addresses,
+                    &signature,
                 ) {
                     let block = Block::new(
                         blockchain.len() as u64,

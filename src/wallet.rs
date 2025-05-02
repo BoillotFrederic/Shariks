@@ -35,15 +35,8 @@ pub struct WalletOwner {
 pub const WALLET_GENESIS: &str = "SRKS_genesis";
 
 // Exempt fee wallet
-pub static EXEMPT_FEES_ADDRESSES: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| {
-    let mut set = HashSet::new();
-    set.insert("SRKS_eb1dd7df0b1d0b3a6d692cd04f17f805039b5a93a373a3d82daa04f43e1fe701".to_string());
-    set.insert("SRKS_ee70894c79f6817fb2246d5b18fa3d55cbec4bc3f2a8d42c420a0ff0285c1804".to_string());
-    set.insert("SRKS_05b81be2d8eb89faba3dae2021e94e7a806ec5eecb21647cb03b8cf6d3c74260".to_string());
-    set.insert("SRKS_77973e317273af4f255a62618973e865524839b0f2a5cd7ace8edb98fdb597a1".to_string());
-    set.insert("SRKS_67996e034605cf1ba791dd18a92f2da6ba8173c19c261ab1d2072d5c5b68088d".to_string());
-    Mutex::new(set)
-});
+pub static EXEMPT_FEES_ADDRESSES: Lazy<Mutex<HashSet<String>>> =
+    Lazy::new(|| Mutex::new(HashSet::new()));
 
 // Key pair
 /*pub fn generate_keypair() -> (SigningKey, VerifyingKey) {
@@ -237,8 +230,57 @@ pub fn load_wallet_owner(path: String) -> WalletOwner {
     let file = File::open(path.clone()).expect("Error : WalletOwner file not found");
     let reader = BufReader::new(file);
     let wallet_owner: WalletOwner =
-        serde_json::from_reader(reader).expect("Erreur : impossible read WalletOwner");
+        serde_json::from_reader(reader).expect("Error : impossible read WalletOwner");
     wallet_owner
+}
+
+// Load exempt addresses fee
+pub fn load_exempt_addresses_from_file() -> HashSet<String> {
+    let data = match fs::read_to_string("exempt_fees_addresses.json") {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("Error : reading file : {}", e);
+            return HashSet::new();
+        }
+    };
+
+    let loaded_set: HashSet<String> = match serde_json::from_str(&data) {
+        Ok(set) => set,
+        Err(e) => {
+            eprintln!("Error : hashSet deserialization : {}", e);
+            return HashSet::new();
+        }
+    };
+
+    if let Ok(mut set) = EXEMPT_FEES_ADDRESSES.lock() {
+        *set = loaded_set.clone();
+    } else {
+        eprintln!("Error : when locking the hashSet");
+    }
+
+    loaded_set
+}
+
+// Save exempt addresses fee
+pub fn save_exempt_addresses_to_file() {
+    if let Ok(set) = EXEMPT_FEES_ADDRESSES.lock() {
+        match serde_json::to_string_pretty(&*set) {
+            Ok(json) => {
+                if let Ok(mut file) = File::create("exempt_fees_addresses.json") {
+                    if let Err(e) = file.write_all(json.as_bytes()) {
+                        eprintln!("Error : reading file : {}", e);
+                    }
+                } else {
+                    eprintln!("Error : creating file");
+                }
+            }
+            Err(e) => {
+                eprintln!("Error : hashSet serialization : {}", e);
+            }
+        }
+    } else {
+        eprintln!("Error : locking HashSet");
+    }
 }
 
 pub fn get_owner_address_wallet(name: String) -> String {

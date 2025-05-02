@@ -28,5 +28,8 @@ Cargo.lock
 # Blockchain
 blockchain.json
 
+# Exempt fees addresses
+exempt_fees_addresses.json
+
 # Env files (si tu en as)
 .env
