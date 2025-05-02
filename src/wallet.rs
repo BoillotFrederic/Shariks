@@ -35,8 +35,15 @@ pub struct WalletOwner {
 pub const WALLET_GENESIS: &str = "SRKS_genesis";
 
 // Exempt fee wallet
-pub static EXEMPT_FEES_ADDRESSES: Lazy<Mutex<HashSet<String>>> =
-    Lazy::new(|| Mutex::new(HashSet::new()));
+pub static EXEMPT_FEES_ADDRESSES: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| {
+    let mut set = HashSet::new();
+    set.insert("SRKS_eb1dd7df0b1d0b3a6d692cd04f17f805039b5a93a373a3d82daa04f43e1fe701".to_string());
+    set.insert("SRKS_ee70894c79f6817fb2246d5b18fa3d55cbec4bc3f2a8d42c420a0ff0285c1804".to_string());
+    set.insert("SRKS_05b81be2d8eb89faba3dae2021e94e7a806ec5eecb21647cb03b8cf6d3c74260".to_string());
+    set.insert("SRKS_77973e317273af4f255a62618973e865524839b0f2a5cd7ace8edb98fdb597a1".to_string());
+    set.insert("SRKS_67996e034605cf1ba791dd18a92f2da6ba8173c19c261ab1d2072d5c5b68088d".to_string());
+    Mutex::new(set)
+});
 
 // Key pair
 /*pub fn generate_keypair() -> (SigningKey, VerifyingKey) {
@@ -64,20 +71,26 @@ pub fn generate_keypair_from_mnemonic() -> (SigningKey, VerifyingKey) {
 }
 
 // Restore key pair from mnemonic
-// pub fn restore_keypair_from_mnemonic(mnemonic_phrase: &str) -> (SigningKey, VerifyingKey) {
-//     let mnemonic = Mnemonic::parse(mnemonic_phrase).expect("Error: invalid mnemonic phrase");
-//
-//     let seed = mnemonic.to_seed("");
-//     let seed_32: &[u8; 32] = seed
-//         .get(..32)
-//         .and_then(|slice| slice.try_into().ok())
-//         .expect("Error: seed must have at least 32 bytes");
-//
-//     let signing_key = SigningKey::from_bytes(seed_32);
-//     let verifying_key = signing_key.verifying_key();
-//
-//     (signing_key, verifying_key)
-// }
+pub fn restore_keypair_from_mnemonic(
+    mnemonic_phrase: &str,
+) -> Result<(SigningKey, VerifyingKey), String> {
+    // Parse
+    let mnemonic = Mnemonic::parse(mnemonic_phrase)
+        .map_err(|_| "Error: invalid mnemonic phrase".to_string())?;
+
+    // Seed
+    let seed = mnemonic.to_seed("");
+    let seed_32: &[u8; 32] = seed
+        .get(..32)
+        .and_then(|slice| slice.try_into().ok())
+        .ok_or_else(|| "Error: seed must have at least 32 bytes".to_string())?;
+
+    // Restore
+    let signing_key = SigningKey::from_bytes(seed_32);
+    let verifying_key = signing_key.verifying_key();
+
+    Ok((signing_key, verifying_key))
+}
 
 // Sign transaction
 pub fn sign_transaction(
@@ -198,11 +211,10 @@ pub fn load_wallets_from_folder(folder_path: &str) -> Vec<Wallet> {
     for entry in entries {
         let entry = entry.unwrap();
         let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) == Some("json") {
-            let content = fs::read_to_string(path).unwrap();
-            let wallet: Wallet = serde_json::from_str(&content).unwrap();
-            wallets.push(wallet);
-        }
+        let content = fs::read_to_string(&path).unwrap();
+        let wallet: Wallet = serde_json::from_str(&content).unwrap();
+
+        wallets.push(wallet);
     }
     wallets
 }

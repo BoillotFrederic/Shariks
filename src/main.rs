@@ -23,13 +23,10 @@ fn first_set(
 
     // Transaction GENESIS
     let fee_rule = FeeRule {
-        rate: 0,
-        max_fee: 0,
         founder_percentage: 0,
         treasury_percentage: 0,
         staking_percentage: 0,
         referral_percentage: 0,
-        referral_bonus: false,
     };
 
     let genesis_tx = Transaction {
@@ -81,7 +78,9 @@ fn main() {
         println!("3. View blocks");
         println!("4. View balances");
         println!("5. Check total supply");
-        println!("6. Save and quit");
+        println!("6. View keypair with mnemonic");
+        println!("7. Wallets list");
+        println!("8. Save and quit");
 
         let mut choice = String::new();
         let addresses = EXEMPT_FEES_ADDRESSES.lock().unwrap();
@@ -117,7 +116,7 @@ fn main() {
                 let found = find_wallet(&wallets, &referrer).is_none();
 
                 if !found || referrer.is_empty() {
-                    wallets.push(create_new_wallet(found, "", &referrer.to_string().trim()));
+                    wallets.push(create_new_wallet(!found, "", &referrer.to_string().trim()));
                 } else {
                     println!("Error : the sponsor {} is not a known wallet", referrer);
                 }
@@ -135,6 +134,21 @@ fn main() {
                 check_total_supply(&ledger, 100_000_000 * NANOSRKS_PER_SRKS);
             }
             "6" => {
+                let mnemonic = prompt("Mnemonic :");
+                match restore_keypair_from_mnemonic(&mnemonic) {
+                    Ok((signing_key, verifying_key)) => {
+                        println!("Public key : {}", hex::encode(verifying_key.to_bytes()));
+                        println!("Private key : {}", hex::encode(signing_key.to_bytes()));
+                    }
+                    Err(err) => eprintln!("Error : failed to restore keypair: {}", err),
+                }
+            }
+            "7" => {
+                for wallet in &wallets {
+                    println!("{}", wallet.address);
+                }
+            }
+            "8" => {
                 save_blockchain(&blockchain);
                 println!("Bye !");
                 break;

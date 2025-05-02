@@ -46,18 +46,17 @@ pub struct Block {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeeRule {
-    pub rate: u64,
-    pub max_fee: u64,
     pub founder_percentage: u64,
     pub treasury_percentage: u64,
     pub staking_percentage: u64,
     pub referral_percentage: u64,
-    pub referral_bonus: bool,
 }
 
 // Globals
 pub const NANOSRKS_PER_SRKS: u64 = 1_000_000_000;
 const PERCENT_BASE: u64 = 100_000;
+const FEE_RATE: u64 = 1_000;
+const FEE_MAX: u64 = 100 * NANOSRKS_PER_SRKS;
 pub const PREFIX_ADDRESS: &str = "SRKS_";
 
 // Blockchain
@@ -100,96 +99,114 @@ pub fn create_transaction(
     exempt_addresses: &HashSet<String>,
     signature: &str,
 ) -> Option<Transaction> {
+    // Error : prefix
+    if !is_valid_address(sender) {
+        println!("Error : invalid sender address (must start with 'SRKS_')");
+        return None;
+    }
+    if !is_valid_address(recipient) {
+        println!("Error : invalid recipient address (must start with 'SRKS_')");
+        return None;
+    }
+
+    // Error : sender is recipient
+    if sender == recipient {
+        println!("Error : The sender must not be the recipient");
+        return None;
+    }
+
     // Get wallets
     let sender_wallet = find_wallet(wallets, sender);
     let recipient_wallet = find_wallet(wallets, recipient);
 
-    // Get errors
-    let err_invalid_prefix_sender = !is_valid_address(sender);
-    let err_invalid_prefix_recipient = !is_valid_address(recipient);
-    let err_sender_wallet_not_found = sender_wallet.is_none();
-    let err_recipient_wallet_not_found = recipient_wallet.is_none();
-    let err_invalid_signature = if let Some(wallet) = &sender_wallet {
-        let public_key = wallet.address.strip_prefix("SRKS_").unwrap_or("");
-        let message = format!("{}:{}:{}", sender, recipient, amount);
-        !verify_signature(public_key, &message, signature)
-    } else {
-        true
-    };
-
-    // If valid transaction
-    if !err_invalid_prefix_sender
-        && !err_invalid_prefix_recipient
-        && !err_sender_wallet_not_found
-        && !err_recipient_wallet_not_found
-        && !err_invalid_signature
-    {
-        // Set fees
-        let fee_rule = FeeRule {
-            rate: 1_000_u64,
-            max_fee: 1 * NANOSRKS_PER_SRKS,
-            founder_percentage: 40_000_u64,
-            treasury_percentage: 30_000_u64,
-            staking_percentage: 10_000_u64,
-            referral_percentage: 20_000_u64,
-            referral_bonus: false,
-        };
-
-        // Calculate fees
-        let fee = if exempt_addresses.contains(sender) {
-            0
-        } else {
-            (amount * fee_rule.rate / PERCENT_BASE).min(fee_rule.max_fee)
-        };
-
-        let total = amount + fee;
-
-        // Sold out
-        if sender != format!("{}{}", PREFIX_ADDRESS, "genesis") {
-            let balance = ledger.get(sender).unwrap_or(&0);
-            if *balance < total {
-                println!(
-                    "Error : not enough tokens. current number of tokens {} : {}, required : {}",
-                    sender, balance, total
-                );
-                return None;
-            }
-        }
-
-        println!("The transaction was successfully completed");
-
-        Some(Transaction {
-            id: Uuid::new_v4(),
-            sender: sender.to_string(),
-            recipient: recipient.to_string(),
-            amount,
-            fee,
-            fee_rule,
-            timestamp: current_timestamp(),
-            signature: signature.to_string(),
-            referrer: sender_wallet?.referrer,
-        })
-    }
-    // Show errors
-    else {
-        if err_invalid_prefix_sender {
-            println!("Error : invalid sender address (must start with 'SRKS_')");
-        }
-        if err_invalid_prefix_recipient {
-            println!("Error : invalid recipient address (must start with 'SRKS_')");
-        }
-        if err_sender_wallet_not_found {
-            println!("Error : sender ({}) not found", sender);
-        }
-        if err_recipient_wallet_not_found {
-            println!("Error : recipient ({}) not found", recipient);
-        }
-        if err_invalid_signature {
-            println!("Error : invalid signature");
-        }
-
+    // Error : wallet not found
+    if sender_wallet.is_none() {
+        println!("Error : sender ({}) not found", sender);
         return None;
     }
+    if recipient_wallet.is_none() {
+        println!("Error : recipient ({}) not found", recipient);
+        return None;
+    }
+
+    // Error : signature
+    if let Some(wallet) = &sender_wallet {
+        let public_key = wallet.address.strip_prefix("SRKS_").unwrap_or("");
+        let message = format!("{}:{}:{}", sender, recipient, amount);
+
+        if !verify_signature(public_key, &message, signature) {
+            println!("Error : invalid signature");
+            return None;
+        }
+    } else {
+        println!("Error : invalid signature");
+        return None;
+    };
+
+    // Check if bonus fee for referrer
+    let referrer_address = if let Some(sender_referrer) = &sender_wallet {
+        sender_referrer.referrer.clone()
+    } else {
+        "".to_string()
+    };
+    let referrer_wallet = find_wallet(wallets, &referrer_address);
+    let bonus_referrer = if let (Some(sender), Some(referrer)) = (&sender_wallet, &referrer_wallet)
+    {
+        sender.first_referrer && !referrer.referrer.is_empty()
+    } else {
+        false
+    };
+
+    // Set fees
+    let fee_rule = FeeRule {
+        founder_percentage: if bonus_referrer {
+            30_000_u64
+        } else {
+            40_000_u64
+        },
+        treasury_percentage: 30_000_u64,
+        staking_percentage: 10_000_u64,
+        referral_percentage: if bonus_referrer {
+            30_000_u64
+        } else {
+            20_000_u64
+        },
+    };
+
+    // Calculate fees
+    let fee = if exempt_addresses.contains(sender) {
+        0
+    } else {
+        (amount * FEE_RATE / PERCENT_BASE).min(FEE_MAX)
+    };
+
+    let total = amount + fee;
+
+    // Sold out
+    if sender != format!("{}{}", PREFIX_ADDRESS, "genesis") {
+        let balance = ledger.get(sender).unwrap_or(&0);
+        if *balance < total {
+            println!(
+                "Error : not enough tokens. current number of tokens {} : {}, required : {}",
+                sender, balance, total
+            );
+            return None;
+        }
+    }
+
+    println!("The transaction was successfully completed");
+
+    Some(Transaction {
+        id: Uuid::new_v4(),
+        sender: sender.to_string(),
+        recipient: recipient.to_string(),
+        amount,
+        fee,
+        fee_rule,
+        timestamp: current_timestamp(),
+        signature: signature.to_string(),
+        referrer: sender_wallet?.referrer,
+    })
 }
 
 // Fees distribution
@@ -197,7 +214,6 @@ fn distribute_fee(
     ledger: &mut HashMap<String, u64>,
     fee: u64,
     fee_rule: FeeRule,
-    has_referrer: bool,
     referrer_wallet: String,
 ) {
     // Stop if no fee
@@ -229,12 +245,8 @@ fn distribute_fee(
     *ledger.entry(staking_address).or_insert(0) += shares[2];
 
     // Check referrer
-    if has_referrer {
-        if !referrer_wallet.is_empty() {
-            *ledger.entry(referrer_wallet.to_string()).or_insert(0) += shares[3];
-        } else {
-            *ledger.entry(founder_address).or_insert(0) += shares[3];
-        }
+    if !referrer_wallet.is_empty() {
+        *ledger.entry(referrer_wallet.to_string()).or_insert(0) += shares[3];
     } else {
         *ledger.entry(founder_address).or_insert(0) += shares[3];
     }
@@ -403,13 +415,11 @@ pub fn initialize_ledger_from_blockchain(blockchain: &Vec<Block>) -> HashMap<Str
 
             *ledger.entry(tx.recipient.clone()).or_insert(0) += tx.amount;
 
-            //let has_referrer = tx.referrer.is_some();
             distribute_fee(
                 &mut ledger,
                 tx.fee,
                 tx.fee_rule.clone(),
-                /*has_referrer*/ !tx.referrer.is_empty(),
-                tx.referrer.to_string(), //tx.referrer.as_ref(),
+                tx.referrer.to_string(),
             );
         }
     }
@@ -438,14 +448,7 @@ fn apply_transaction(ledger: &mut Ledger, tx: &Transaction) -> bool {
         }
         *ledger.entry(tx.recipient.clone()).or_insert(0) += tx.amount;
 
-        //let has_referrer = tx.referrer.is_some();
-        distribute_fee(
-            ledger,
-            tx.fee,
-            tx.fee_rule.clone(),
-            /*has_referrer*/ !tx.referrer.is_empty(),
-            tx.referrer.to_string(), //tx.referrer.as_ref(),
-        );
+        distribute_fee(ledger, tx.fee, tx.fee_rule.clone(), tx.referrer.to_string());
 
         true
     } else {

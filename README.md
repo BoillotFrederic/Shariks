@@ -17,7 +17,7 @@ Créer une crypto qui ne dépend pas de la puissance de calcul ou d'infrastructu
 
 ### Proof of Stake (PoS) — Staking automatique
 - Toute adresse détenant des jetons reçoit des "dividendes" mensuels issus des frais de transactions.
-- Pas de génération magique de tokens : les récompenses proviennent d’une **réserve de 10%** et des **frais collectés**.
+- Pas de génération magique de tokens : les récompenses proviennent exclusivement des **frais collectés**.
 - Un système comptable tient compte du **temps exact de détention**, malgré les mouvements, pour assurer une distribution équitable (type "livret A").
 
 ### Inactivité
@@ -38,7 +38,7 @@ Créer une crypto qui ne dépend pas de la puissance de calcul ou d'infrastructu
 
 ### Frais de transaction
 - **1%** par transaction.
-- **Plafond** : ne peut pas dépasser **1 SRKS**.
+- **Plafond** : ne peut pas dépasser **100 SRKS** (pour une base de 1SRKS = 0.01$, ce plafond sera ensuite adapté en temps réel afin de ne pas dépasser les 1$ symbolique).
 
 ### Répartition des frais
 | Catégorie            | Répartition normale | Si l’expéditeur fait partie des 100 premiers filleuls d’un parrain |
@@ -66,4 +66,4 @@ Créer une crypto qui ne dépend pas de la puissance de calcul ou d'infrastructu
 
 ## Adresse de genèse
 L'adresse `SRKS_genesis` détient la totalité des 100 millions de tokens au démarrage.
-Elle sert à distribuer progressivement les jetons selon la logique ci-dessus.
+Elle sert à distribuer les jetons selon la logique ci-dessus.
