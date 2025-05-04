@@ -4,6 +4,7 @@ mod utils;
 mod wallet;
 
 // Dependencies
+use base64::Engine;
 use blockchain::*;
 use sqlx::PgPool;
 use std::collections::HashMap;
@@ -21,6 +22,7 @@ async fn first_set(
     // Public sale
     let public_sale_wallet =
         create_new_wallet(false, &"PUBLIC_SALE".to_string(), "", &pg_pool).await;
+    let memo = "GENESIS";
 
     // Transaction GENESIS
     let fee_rule = FeeRule {
@@ -40,6 +42,7 @@ async fn first_set(
         timestamp: current_timestamp(),
         referrer: "".to_string(),
         signature: "".to_string(),
+        memo: memo.to_string(),
     };
 
     let genesis_block = Block::new(0, vec![genesis_tx], "0".to_string());
@@ -95,16 +98,53 @@ async fn main() -> Result<(), sqlx::Error> {
             "1" => {
                 let sender = prompt("Sender :");
                 let recipient = prompt("Recipient :");
-                let amount: u64 =
-                    prompt("Amount :").trim().parse().unwrap_or(0) * NANOSRKS_PER_SRKS;
+                let amount: u64 = to_nanosrks(prompt("Amount :").trim().parse().unwrap_or(0.0));
+                let dh_secret_str = prompt("Secret DH :");
                 let private_key = prompt("Private key :");
 
-                let signature =
-                    sign_transaction(private_key, sender.clone(), recipient.clone(), amount);
+                // Memo
+                let recipient_dh_public =
+                    match get_dh_public_key_by_address(&pg_pool, &recipient).await {
+                        Ok(Some(dh_pubkey)) => dh_pubkey,
+                        Ok(None) => {
+                            eprintln!("Erreur : destinataire introuvable ou pas de dh_public.");
+                            return Ok(());
+                        }
+                        Err(e) => {
+                            eprintln!("Erreur SQL : {}", e);
+                            return Err(e);
+                        }
+                    };
+                let sender_dh_secret = match static_secret_from_hex(&dh_secret_str) {
+                    Ok(Some(secret)) => secret,
+                    Ok(None) => {
+                        eprintln!("Error : dh_secret invalid");
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        eprintln!("Error decoding dh_secret: {}", e);
+                        return Err(e.into());
+                    }
+                };
+                let memo_input = prompt("Memo :");
+                let (encrypted_memo, nonce) =
+                    encrypt_message(&sender_dh_secret, &recipient_dh_public, &memo_input);
 
-                if let Some(tx) =
-                    create_transaction(&ledger, &sender, &recipient, amount, &signature, &pg_pool)
-                        .await
+                let nonce_encoded = base64::engine::general_purpose::STANDARD.encode(nonce);
+                let memo = format!("{}:{}", encrypted_memo, nonce_encoded);
+
+                let signature = sign_transaction(
+                    private_key,
+                    sender.clone(),
+                    recipient.clone(),
+                    amount,
+                    memo.clone(),
+                );
+
+                if let Some(tx) = create_transaction(
+                    &ledger, &sender, &recipient, amount, &memo, &signature, &pg_pool,
+                )
+                .await
                 {
                     let block = Block::new(
                         blockchain.len() as u64,
@@ -120,8 +160,8 @@ async fn main() -> Result<(), sqlx::Error> {
                 let referrer = prompt("Godfather :");
                 let found = wallet_exists(&pg_pool, &referrer).await.unwrap_or(false);
 
-                if !found || referrer.is_empty() {
-                    create_new_wallet(!found, "", &referrer.to_string().trim(), &pg_pool).await;
+                if found || referrer.is_empty() {
+                    create_new_wallet(found, "", &referrer.to_string().trim(), &pg_pool).await;
                 } else {
                     println!("Error : the sponsor {} is not a known wallet", referrer);
                 }
@@ -140,10 +180,12 @@ async fn main() -> Result<(), sqlx::Error> {
             }
             "6" => {
                 let mnemonic = prompt("Mnemonic :");
-                match restore_keypair_from_mnemonic(&mnemonic) {
-                    Ok((signing_key, verifying_key)) => {
+                match restore_full_keypair_from_mnemonic(&mnemonic) {
+                    Ok((signing_key, verifying_key, dh_secret, dh_public)) => {
                         println!("Public key : {}", hex::encode(verifying_key.to_bytes()));
                         println!("Private key : {}", hex::encode(signing_key.to_bytes()));
+                        println!("dh public : {}", hex::encode(dh_public.to_bytes()));
+                        println!("dh secret : {}", hex::encode(dh_secret.to_bytes()));
                     }
                     Err(err) => eprintln!("Error : failed to restore keypair: {}", err),
                 }

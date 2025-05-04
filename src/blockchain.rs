@@ -34,6 +34,7 @@ pub struct Transaction {
     pub timestamp: u128,
     pub signature: String,
     pub referrer: String,
+    pub memo: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -54,6 +55,7 @@ pub struct FeeRule {
 }
 
 // Globals
+const MIN_AMOUNT: u64 = 1000000;
 pub const NANOSRKS_PER_SRKS: u64 = 1_000_000_000;
 const PERCENT_BASE: u64 = 100_000;
 const FEE_RATE: u64 = 1_000;
@@ -96,6 +98,7 @@ pub async fn create_transaction(
     sender: &str,
     recipient: &str,
     amount: u64,
+    memo: &str,
     signature: &str,
     pg_pool: &PgPool,
 ) -> Option<Transaction> {
@@ -129,8 +132,19 @@ pub async fn create_transaction(
         return None;
     }
 
+    // Invalid amount
+    if amount == 0 {
+        println!("Error : Invalid amount: cannot be zero");
+        return None;
+    }
+    if amount < MIN_AMOUNT {
+        println!("Error : Amount too low: minimum required is {}", MIN_AMOUNT);
+        return None;
+    }
+
+    // Error : invalid signature
     let public_key = sender_wallet.address.strip_prefix("SRKS_").unwrap_or("");
-    let message = format!("{}:{}:{}", sender, recipient, amount);
+    let message = format!("{}:{}:{}:{}", sender, recipient, amount, memo);
 
     if !verify_signature(public_key, &message, signature) {
         println!("Error : invalid signature");
@@ -202,6 +216,7 @@ pub async fn create_transaction(
         timestamp: current_timestamp(),
         signature: signature.to_string(),
         referrer: sender_wallet.referrer.as_deref().unwrap_or("").to_string(),
+        memo: memo.to_string(),
     })
 }
 
@@ -306,6 +321,7 @@ pub async fn distribute_initial_tokens(
             public_sale_address.clone(),
             recipient.clone(),
             amount,
+            "Initial distribution".to_string(),
         );
 
         // Transaction
@@ -314,6 +330,7 @@ pub async fn distribute_initial_tokens(
             &public_sale_address,
             &recipient,
             amount,
+            "Initial distribution",
             &signature,
             &pg_pool,
         )
@@ -454,9 +471,9 @@ fn apply_transaction(ledger: &mut Ledger, tx: &Transaction) -> bool {
 // Helpers
 // -------
 
-/*pub fn to_nanosrks(srks: f64) -> u64 {
+pub fn to_nanosrks(srks: f64) -> u64 {
     (srks * NANOSRKS_PER_SRKS as f64).round() as u64
-}*/
+}
 
 pub fn to_srks(nanosrks: u64) -> f64 {
     nanosrks as f64 / NANOSRKS_PER_SRKS as f64
