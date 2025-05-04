@@ -2,26 +2,24 @@
 use bip39::Mnemonic;
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use hex;
-use once_cell::sync::Lazy;
 //use rand::rngs::OsRng;
 //use base64::decode;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use sqlx::{Error, PgPool};
 use std::convert::TryInto;
-use std::fs;
+//use std::fs;
 use std::fs::{File, OpenOptions};
-use std::io::Write;
+//use std::io::Write;
 use std::io::{BufReader, BufWriter};
-use std::sync::Mutex;
 
 // Crate
 use crate::blockchain::PREFIX_ADDRESS;
-use crate::increment_file;
+//use crate::increment_file;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Wallet {
     pub address: String,
-    pub referrer: String,
+    pub referrer: Option<String>,
     pub first_referrer: bool,
 }
 
@@ -33,10 +31,6 @@ pub struct WalletOwner {
 
 // Global
 pub const WALLET_GENESIS: &str = "SRKS_genesis";
-
-// Exempt fee wallet
-pub static EXEMPT_FEES_ADDRESSES: Lazy<Mutex<HashSet<String>>> =
-    Lazy::new(|| Mutex::new(HashSet::new()));
 
 // Key pair
 /*pub fn generate_keypair() -> (SigningKey, VerifyingKey) {
@@ -140,76 +134,128 @@ pub fn verify_signature(public_key_hex: &str, message: &str, signature_hex: &str
 }
 
 // Create a new wallet
-pub fn create_new_wallet(referrer_found: bool, save_private_key: &str, referrer: &str) -> Wallet {
-    // Generate
-    pub fn generate(referrer_found: bool, save_private_key: String, referrer: &str) -> Wallet {
-        let (signing_key, verifying_key) = generate_keypair_from_mnemonic();
+pub async fn create_new_wallet(
+    referrer_found: bool,
+    save_private_key: &str,
+    referrer: &str,
+    pg_pool: &PgPool,
+) -> Wallet {
+    // Keypair generate
+    let (signing_key, verifying_key) = generate_keypair_from_mnemonic();
 
-        let private_key_bytes = signing_key.to_bytes();
-        let public_key_bytes = verifying_key.to_bytes();
+    let private_key_bytes = signing_key.to_bytes();
+    let public_key_bytes = verifying_key.to_bytes();
 
-        let private_key_hex = hex::encode(private_key_bytes);
-        let public_key_hex = hex::encode(public_key_bytes);
+    let private_key_hex = hex::encode(private_key_bytes);
+    let public_key_hex = hex::encode(public_key_bytes);
+    let address = format!("SRKS_{}", public_key_hex);
 
-        let address = format!("SRKS_{}", public_key_hex);
+    // Check if the wallet is one of the first 100 referrals of the referrer
+    let is_first_referrer = if referrer_found {
+        let updated = sqlx::query!(
+            r#"
+            UPDATE referrer_counter
+            SET counter = counter + 1
+            WHERE referrer = $1
+            RETURNING counter
+            "#,
+            address
+        )
+        .fetch_one(pg_pool)
+        .await;
 
-        // Update referrer stat
-        let is_first_referrer = if referrer_found {
-            match increment_file(format!("referrer_counter\\{}", referrer)) {
-                Ok(current_value) => current_value <= 100,
-                Err(_) => false,
+        match updated {
+            Ok(row) => row.counter <= 100,
+            Err(e) => {
+                eprintln!("Error : update referrer_counter: {}", e);
+                false
             }
-        } else {
-            false
+        }
+    } else {
+        false
+    };
+
+    // If it is a owner wallet then we save the private key
+    if !save_private_key.is_empty() {
+        let owner = WalletOwner {
+            public_key: public_key_hex,
+            private_key: private_key_hex,
         };
-
-        // Save private Key
-        if !save_private_key.is_empty() {
-            let owner = WalletOwner {
-                public_key: public_key_hex,
-                private_key: private_key_hex,
-            };
-            save_wallet_owner(format!("first_set\\{}", save_private_key), owner);
-        }
-
-        // Result
-        Wallet {
-            address: address.to_string(),
-            referrer: referrer.to_string(),
-            first_referrer: is_first_referrer,
-        }
+        save_wallet_owner(format!("first_set\\{}", save_private_key), owner);
     }
 
-    fn save_wallet_to_file(wallet: &Wallet, path: &str) {
-        // Wallet
-        let serialized = serde_json::to_string_pretty(wallet).unwrap();
-        let mut file = File::create(&format!("wallets\\{}", path)).unwrap();
-        file.write_all(serialized.as_bytes()).unwrap();
+    // The wallet struct
+    let wallet = Wallet {
+        address: address.clone(),
+        referrer: (!referrer.is_empty()).then(|| referrer.to_string()),
+        first_referrer: is_first_referrer,
+    };
 
-        // Referrer counter init
-        let mut file = File::create(&format!("referrer_counter\\{}", path)).unwrap();
-        file.write_all("0".as_bytes()).unwrap();
+    // Insert the wallet
+    if let Err(e) = sqlx::query!(
+        r#"
+        INSERT INTO wallets (address, referrer, first_referrer)
+        VALUES ($1, $2, $3)
+        "#,
+        wallet.address,
+        wallet.referrer,
+        wallet.first_referrer
+    )
+    .execute(pg_pool)
+    .await
+    {
+        eprintln!("Error : insert wallet : {}", e);
     }
 
-    let wallet = generate(referrer_found, save_private_key.to_string(), referrer);
-    save_wallet_to_file(&wallet, &wallet.address);
-    return wallet;
+    // Insert the referrer counter
+    if let Err(e) = sqlx::query!(
+        r#"
+        INSERT INTO referrer_counter (referrer, counter)
+        VALUES ($1, $2)
+        "#,
+        wallet.address,
+        0_i32
+    )
+    .execute(pg_pool)
+    .await
+    {
+        eprintln!("Error : insert referrer counter : {}", e);
+    };
+
+    // Return the wallet
+    wallet
 }
 
-// Load all wallets
-pub fn load_wallets_from_folder(folder_path: &str) -> Vec<Wallet> {
-    let mut wallets = Vec::new();
+// Add exempt fees address
+pub async fn add_exempt_fee_address(pg_pool: &PgPool, address: &str) -> Result<(), Error> {
+    sqlx::query!(
+        r#"
+        INSERT INTO exempt_fees_addresses (address)
+        VALUES ($1)
+        ON CONFLICT DO NOTHING
+        "#,
+        address
+    )
+    .execute(pg_pool)
+    .await?;
 
-    let entries = fs::read_dir(folder_path).unwrap();
-    for entry in entries {
-        let entry = entry.unwrap();
-        let path = entry.path();
-        let content = fs::read_to_string(&path).unwrap();
-        let wallet: Wallet = serde_json::from_str(&content).unwrap();
+    Ok(())
+}
 
-        wallets.push(wallet);
-    }
-    wallets
+// Checking if an address is exempt from fees
+pub async fn is_exempt_fee_address(pg_pool: &PgPool, address: &str) -> Result<bool, Error> {
+    let exists = sqlx::query_scalar!(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM exempt_fees_addresses WHERE address = $1
+        )
+        "#,
+        address
+    )
+    .fetch_one(pg_pool)
+    .await?;
+
+    Ok(exists.unwrap_or(false))
 }
 
 // Save wallet owner
@@ -234,55 +280,6 @@ pub fn load_wallet_owner(path: String) -> WalletOwner {
     wallet_owner
 }
 
-// Load exempt addresses fee
-pub fn load_exempt_addresses_from_file() -> HashSet<String> {
-    let data = match fs::read_to_string("exempt_fees_addresses.json") {
-        Ok(d) => d,
-        Err(e) => {
-            eprintln!("Error : reading file : {}", e);
-            return HashSet::new();
-        }
-    };
-
-    let loaded_set: HashSet<String> = match serde_json::from_str(&data) {
-        Ok(set) => set,
-        Err(e) => {
-            eprintln!("Error : hashSet deserialization : {}", e);
-            return HashSet::new();
-        }
-    };
-
-    if let Ok(mut set) = EXEMPT_FEES_ADDRESSES.lock() {
-        *set = loaded_set.clone();
-    } else {
-        eprintln!("Error : when locking the hashSet");
-    }
-
-    loaded_set
-}
-
-// Save exempt addresses fee
-pub fn save_exempt_addresses_to_file() {
-    if let Ok(set) = EXEMPT_FEES_ADDRESSES.lock() {
-        match serde_json::to_string_pretty(&*set) {
-            Ok(json) => {
-                if let Ok(mut file) = File::create("exempt_fees_addresses.json") {
-                    if let Err(e) = file.write_all(json.as_bytes()) {
-                        eprintln!("Error : reading file : {}", e);
-                    }
-                } else {
-                    eprintln!("Error : creating file");
-                }
-            }
-            Err(e) => {
-                eprintln!("Error : hashSet serialization : {}", e);
-            }
-        }
-    } else {
-        eprintln!("Error : locking HashSet");
-    }
-}
-
 pub fn get_owner_address_wallet(name: String) -> String {
     let path = "first_set\\";
     return format!(
@@ -297,12 +294,63 @@ pub fn get_owner_privatekey_wallet(name: String) -> String {
     return load_wallet_owner(format!("{}{}", path, name)).private_key;
 }
 
+// Checking if wallet exists
+pub async fn wallet_exists(pool: &PgPool, address: &str) -> Result<bool, Error> {
+    let exists = sqlx::query_scalar!(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM wallets WHERE address = $1
+        )
+        "#,
+        address
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(exists.unwrap_or(false))
+}
+
 // Find a wallet
-pub fn find_wallet(wallets: &Vec<Wallet>, address: &str) -> Option<Wallet> {
-    wallets.iter().find(|w| w.address == address).cloned()
+pub async fn find_wallet(pool: &PgPool, address: &str) -> Result<Wallet, Error> {
+    let result = sqlx::query_as!(
+        Wallet,
+        r#"
+        SELECT address, referrer, first_referrer
+        FROM wallets
+        WHERE address = $1
+        "#,
+        address
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(result.unwrap_or(Wallet {
+        address: "".to_string(),
+        referrer: None,
+        first_referrer: false,
+    }))
 }
 
 // Check wallet
 pub fn is_valid_address(address: &str) -> bool {
     address.starts_with("SRKS_")
+}
+
+// Print all wallets
+pub async fn print_all_wallets(pool: &PgPool) -> Result<(), Error> {
+    let wallets = sqlx::query_as!(
+        Wallet,
+        r#"
+        SELECT address, referrer, first_referrer
+        FROM wallets
+        "#
+    )
+    .fetch_all(pool)
+    .await?;
+
+    for wallet in wallets {
+        println!("{}", wallet.address);
+    }
+
+    Ok(())
 }

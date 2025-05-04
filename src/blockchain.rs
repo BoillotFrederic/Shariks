@@ -2,8 +2,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json;
 use sha2::{Digest, Sha256};
+use sqlx::PgPool;
 use std::collections::HashMap;
-use std::collections::HashSet;
+//use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
 use std::io::{BufReader, BufWriter};
 use uuid::Uuid;
@@ -12,9 +13,9 @@ use uuid::Uuid;
 use crate::current_timestamp;
 use crate::trim_trailing_zeros;
 use crate::wallet::{
-    EXEMPT_FEES_ADDRESSES, Wallet, create_new_wallet, find_wallet, get_owner_address_wallet,
-    get_owner_privatekey_wallet, is_valid_address, load_wallet_owner, sign_transaction,
-    verify_signature,
+    add_exempt_fee_address, create_new_wallet, find_wallet, get_owner_address_wallet,
+    get_owner_privatekey_wallet, is_exempt_fee_address, is_valid_address, load_wallet_owner,
+    sign_transaction, verify_signature,
 };
 
 // Type
@@ -90,14 +91,13 @@ impl Block {
 }
 
 // Create a transaction
-pub fn create_transaction(
-    wallets: &Vec<Wallet>,
+pub async fn create_transaction(
     ledger: &HashMap<String, u64>,
     sender: &str,
     recipient: &str,
     amount: u64,
-    exempt_addresses: &HashSet<String>,
     signature: &str,
+    pg_pool: &PgPool,
 ) -> Option<Transaction> {
     // Error : prefix
     if !is_valid_address(sender) {
@@ -116,46 +116,39 @@ pub fn create_transaction(
     }
 
     // Get wallets
-    let sender_wallet = find_wallet(wallets, sender);
-    let recipient_wallet = find_wallet(wallets, recipient);
+    let sender_wallet = find_wallet(&pg_pool, sender).await.unwrap();
+    let recipient_wallet = find_wallet(&pg_pool, recipient).await.unwrap();
 
     // Error : wallet not found
-    if sender_wallet.is_none() {
+    if sender_wallet.address.is_empty() {
         println!("Error : sender ({}) not found", sender);
         return None;
     }
-    if recipient_wallet.is_none() {
+    if recipient_wallet.address.is_empty() {
         println!("Error : recipient ({}) not found", recipient);
         return None;
     }
 
-    // Error : signature
-    if let Some(wallet) = &sender_wallet {
-        let public_key = wallet.address.strip_prefix("SRKS_").unwrap_or("");
-        let message = format!("{}:{}:{}", sender, recipient, amount);
+    let public_key = sender_wallet.address.strip_prefix("SRKS_").unwrap_or("");
+    let message = format!("{}:{}:{}", sender, recipient, amount);
 
-        if !verify_signature(public_key, &message, signature) {
-            println!("Error : invalid signature");
-            return None;
-        }
-    } else {
+    if !verify_signature(public_key, &message, signature) {
         println!("Error : invalid signature");
         return None;
-    };
+    }
 
     // Check if bonus fee for referrer
-    let referrer_address = if let Some(sender_referrer) = &sender_wallet {
-        sender_referrer.referrer.clone()
-    } else {
-        "".to_string()
-    };
-    let referrer_wallet = find_wallet(wallets, &referrer_address);
-    let bonus_referrer = if let (Some(sender), Some(referrer)) = (&sender_wallet, &referrer_wallet)
-    {
-        sender.first_referrer && !referrer.referrer.is_empty()
-    } else {
-        false
-    };
+    let sender_referrer_wallet =
+        find_wallet(&pg_pool, sender_wallet.referrer.as_deref().unwrap_or(""))
+            .await
+            .unwrap();
+
+    let bonus_referrer =
+        if !sender_referrer_wallet.address.is_empty() && sender_wallet.first_referrer {
+            true
+        } else {
+            false
+        };
 
     // Set fees
     let fee_rule = FeeRule {
@@ -174,7 +167,10 @@ pub fn create_transaction(
     };
 
     // Calculate fees
-    let fee = if exempt_addresses.contains(sender) {
+    let fee = if is_exempt_fee_address(&pg_pool, &sender)
+        .await
+        .unwrap_or(false)
+    {
         0
     } else {
         (amount * FEE_RATE / PERCENT_BASE).min(FEE_MAX)
@@ -205,7 +201,7 @@ pub fn create_transaction(
         fee_rule,
         timestamp: current_timestamp(),
         signature: signature.to_string(),
-        referrer: sender_wallet?.referrer,
+        referrer: sender_wallet.referrer.as_deref().unwrap_or("").to_string(),
     })
 }
 
@@ -266,30 +262,28 @@ pub fn split_fee_exact(fee: u64, percentages: &[u64]) -> Vec<u64> {
 }
 
 // First distribution
-pub fn distribute_initial_tokens(
+pub async fn distribute_initial_tokens(
     ledger: &mut Ledger,
-    wallets: &mut Vec<Wallet>,
     blockchain: &mut Blockchain,
+    pg_pool: &PgPool,
 ) {
-    // Exempt addresses
-    let mut exempt_addresses = EXEMPT_FEES_ADDRESSES.lock().unwrap();
-
     // Public sale
     let public_sale_address = get_owner_address_wallet("PUBLIC_SALE".to_string());
     let public_sale_private_key = get_owner_privatekey_wallet("PUBLIC_SALE".to_string());
-    let public_sale_wallet = find_wallet(wallets, &public_sale_address);
+    let public_sale_wallet = find_wallet(&pg_pool, &public_sale_address).await.unwrap();
 
-    if let Some(wallet) = public_sale_wallet {
-        exempt_addresses.insert(wallet.address.clone());
+    if let Err(e) = add_exempt_fee_address(&pg_pool, &public_sale_wallet.address).await {
+        eprintln!("Error : add exempt_fees_address : {}", e);
     }
 
     // Wallets to be created
     let wallet_names = vec!["FOUNDER", "SPONSORSHIP", "TREASURY", "STAKING"];
 
     for wallet_name in wallet_names.iter() {
-        let wallet = create_new_wallet(false, wallet_name, "");
-        wallets.push(wallet.clone());
-        exempt_addresses.insert(wallet.address.clone());
+        let wallet = create_new_wallet(false, wallet_name, "", &pg_pool).await;
+        if let Err(e) = add_exempt_fee_address(&pg_pool, &wallet.address).await {
+            eprintln!("Error : add exempt_fees_address : {}", e);
+        }
     }
 
     let distribution = vec![
@@ -316,14 +310,15 @@ pub fn distribute_initial_tokens(
 
         // Transaction
         if let Some(tx) = create_transaction(
-            wallets,
             ledger,
             &public_sale_address,
             &recipient,
             amount,
-            &exempt_addresses,
             &signature,
-        ) {
+            &pg_pool,
+        )
+        .await
+        {
             apply_transaction(ledger, &tx);
             transactions.push(tx);
         }

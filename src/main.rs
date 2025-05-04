@@ -5,6 +5,7 @@ mod wallet;
 
 // Dependencies
 use blockchain::*;
+use sqlx::PgPool;
 use std::collections::HashMap;
 use std::io;
 use utils::*;
@@ -12,14 +13,14 @@ use uuid::Uuid;
 use wallet::*;
 
 // First set
-fn first_set(
+async fn first_set(
     blockchain: &mut Vec<Block>,
     ledger: &mut HashMap<String, u64>,
-    wallets: &mut Vec<Wallet>,
+    pg_pool: &PgPool,
 ) {
     // Public sale
-    let public_sale_wallet = create_new_wallet(false, &"PUBLIC_SALE".to_string(), "");
-    wallets.push(public_sale_wallet.clone());
+    let public_sale_wallet =
+        create_new_wallet(false, &"PUBLIC_SALE".to_string(), "", &pg_pool).await;
 
     // Transaction GENESIS
     let fee_rule = FeeRule {
@@ -46,21 +47,21 @@ fn first_set(
     update_ledger_with_block(ledger, &genesis_block);
 
     // Transaction of distribution initial
-    distribute_initial_tokens(ledger, wallets, blockchain);
-
-    // Save exempt addresses
-    save_exempt_addresses_to_file();
+    distribute_initial_tokens(ledger, blockchain, &pg_pool).await;
 
     // First block chain save
     save_blockchain(&blockchain);
 }
 
 // Main
-fn main() {
+#[tokio::main]
+async fn main() -> Result<(), sqlx::Error> {
     println!("Initialization start");
 
-    // Load wallets
-    let mut wallets = load_wallets_from_folder("wallets");
+    // Connect to database
+    dotenvy::dotenv().ok();
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    let pg_pool = PgPool::connect(&database_url).await?;
 
     // Load bloackchain
     let mut blockchain = load_blockchain();
@@ -70,7 +71,7 @@ fn main() {
 
     // Create first transactions
     if blockchain.is_empty() {
-        first_set(&mut blockchain, &mut ledger, &mut wallets);
+        first_set(&mut blockchain, &mut ledger, &pg_pool).await;
     }
 
     // Transaction ask
@@ -86,7 +87,7 @@ fn main() {
         println!("8. Save and quit");
 
         let mut choice = String::new();
-        let exempt_fees_addresses = load_exempt_addresses_from_file();
+
         io::stdin()
             .read_line(&mut choice)
             .expect("Error : read line");
@@ -101,15 +102,10 @@ fn main() {
                 let signature =
                     sign_transaction(private_key, sender.clone(), recipient.clone(), amount);
 
-                if let Some(tx) = create_transaction(
-                    &wallets,
-                    &ledger,
-                    &sender,
-                    &recipient,
-                    amount,
-                    &exempt_fees_addresses,
-                    &signature,
-                ) {
+                if let Some(tx) =
+                    create_transaction(&ledger, &sender, &recipient, amount, &signature, &pg_pool)
+                        .await
+                {
                     let block = Block::new(
                         blockchain.len() as u64,
                         vec![tx],
@@ -122,10 +118,10 @@ fn main() {
             }
             "2" => {
                 let referrer = prompt("Godfather :");
-                let found = find_wallet(&wallets, &referrer).is_none();
+                let found = wallet_exists(&pg_pool, &referrer).await.unwrap_or(false);
 
                 if !found || referrer.is_empty() {
-                    wallets.push(create_new_wallet(!found, "", &referrer.to_string().trim()));
+                    create_new_wallet(!found, "", &referrer.to_string().trim(), &pg_pool).await;
                 } else {
                     println!("Error : the sponsor {} is not a known wallet", referrer);
                 }
@@ -153,8 +149,8 @@ fn main() {
                 }
             }
             "7" => {
-                for wallet in &wallets {
-                    println!("{}", wallet.address);
+                if let Err(e) = print_all_wallets(&pg_pool).await {
+                    eprintln!("Error : print wallets : {}", e);
                 }
             }
             "8" => {
@@ -165,4 +161,6 @@ fn main() {
             _ => println!("Error : invalid choise"),
         }
     }
+
+    Ok(())
 }
