@@ -37,40 +37,37 @@ pub struct WalletOwner {
 // Global
 pub const WALLET_GENESIS: &str = "SRKS_genesis";
 
-// Key pair
-/*fn generate_keypair() -> (EphemeralSecret, XPublicKey) {
-    let secret = EphemeralSecret::random_from_rng(OsRng);
-    let public = XPublicKey::from(&secret);
-    (secret, public)
-}*/
-
 // Encrypt message
 pub fn encrypt_message(
     sender_secret: &StaticSecret,
     recipient_public: &XPublicKey,
     message: &str,
 ) -> (String, [u8; 24]) {
-    let shared_secret = sender_secret.diffie_hellman(recipient_public);
-    let cipher = XChaCha20Poly1305::new_from_slice(shared_secret.as_bytes()).unwrap();
+    if message.is_empty() {
+        ("".to_string(), [0u8; 24])
+    } else {
+        let shared_secret = sender_secret.diffie_hellman(recipient_public);
+        let cipher = XChaCha20Poly1305::new_from_slice(shared_secret.as_bytes()).unwrap();
 
-    let mut nonce = [0u8; 24];
-    rand::rngs::OsRng.fill_bytes(&mut nonce);
+        let mut nonce = [0u8; 24];
+        rand::rngs::OsRng.fill_bytes(&mut nonce);
 
-    let ciphertext = cipher
-        .encrypt(&XNonce::from(nonce), message.as_bytes())
-        .unwrap();
+        let ciphertext = cipher
+            .encrypt(&XNonce::from(nonce), message.as_bytes())
+            .unwrap();
 
-    (general_purpose::STANDARD.encode(ciphertext), nonce)
+        (general_purpose::STANDARD.encode(ciphertext), nonce)
+    }
 }
 
 // Decrypt message
-/*fn decrypt_message(
-    recipient_secret: StaticSecret,
-    sender_public: &XPublicKey,
+/*pub fn decrypt_message(
+    dh_secret: StaticSecret,
+    dh_public: &XPublicKey,
     ciphertext_b64: &str,
     nonce: [u8; 24],
 ) -> Option<String> {
-    let shared_secret = recipient_secret.diffie_hellman(sender_public);
+    let shared_secret = dh_secret.diffie_hellman(dh_public);
     let cipher = XChaCha20Poly1305::new_from_slice(shared_secret.as_bytes()).unwrap();
 
     let ciphertext = general_purpose::STANDARD.decode(ciphertext_b64).ok()?;
@@ -82,21 +79,6 @@ pub fn encrypt_message(
 }*/
 
 // Generate key pair from mnemonic
-/*pub fn generate_keypair_from_mnemonic() -> (SigningKey, VerifyingKey) {
-    let mnemonic = Mnemonic::generate(12).unwrap();
-
-    println!("Mnemonic: {}", mnemonic.to_string());
-
-    let seed = mnemonic.to_seed("");
-    let seed_bytes: &[u8; 32] = seed[..32]
-        .try_into()
-        .expect("Error : seed must be at least 32 bytes");
-
-    let signing_key = SigningKey::from_bytes(seed_bytes);
-    let verifying_key = signing_key.verifying_key();
-
-    (signing_key, verifying_key)
-}*/
 pub fn generate_full_keypair_from_mnemonic()
 -> (String, SigningKey, VerifyingKey, StaticSecret, XPublicKey) {
     let mnemonic = Mnemonic::generate(12).unwrap();
@@ -116,6 +98,7 @@ pub fn generate_full_keypair_from_mnemonic()
     (phrase, signing_key, verifying_key, dh_secret, dh_public)
 }
 
+// Restore key pair from mnemonic
 pub fn restore_full_keypair_from_mnemonic(
     phrase: &str,
 ) -> Result<(SigningKey, VerifyingKey, StaticSecret, XPublicKey), String> {
@@ -134,28 +117,6 @@ pub fn restore_full_keypair_from_mnemonic(
 
     Ok((signing_key, verifying_key, dh_secret, dh_public))
 }
-
-// Restore key pair from mnemonic
-/*pub fn restore_keypair_from_mnemonic(
-    mnemonic_phrase: &str,
-) -> Result<(SigningKey, VerifyingKey), String> {
-    // Parse
-    let mnemonic = Mnemonic::parse(mnemonic_phrase)
-        .map_err(|_| "Error: invalid mnemonic phrase".to_string())?;
-
-    // Seed
-    let seed = mnemonic.to_seed("");
-    let seed_32: &[u8; 32] = seed
-        .get(..32)
-        .and_then(|slice| slice.try_into().ok())
-        .ok_or_else(|| "Error: seed must have at least 32 bytes".to_string())?;
-
-    // Restore
-    let signing_key = SigningKey::from_bytes(seed_32);
-    let verifying_key = signing_key.verifying_key();
-
-    Ok((signing_key, verifying_key))
-}*/
 
 // Sign transaction
 pub fn sign_transaction(
@@ -440,6 +401,28 @@ pub async fn print_all_wallets(pool: &PgPool) -> Result<(), Error> {
     Ok(())
 }
 
+// Get dh public (hex) from data base
+pub async fn get_dh_public_key_hex_by_address(
+    pool: &PgPool,
+    address: &str,
+) -> Result<String, sqlx::Error> {
+    let result = sqlx::query!(
+        r#"
+        SELECT dh_public
+        FROM wallets
+        WHERE address = $1
+        "#,
+        address
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(result
+        .and_then(|row| row.dh_public)
+        .unwrap_or_else(|| "".to_string()))
+}
+
+// Get dh public (XPublicKey) from data base
 pub async fn get_dh_public_key_by_address(
     pool: &PgPool,
     address: &str,
@@ -473,14 +456,44 @@ pub async fn get_dh_public_key_by_address(
     }
 }
 
-pub fn static_secret_from_hex(hex_str: &str) -> Result<Option<StaticSecret>, Error> {
-    let bytes = hex::decode(hex_str.trim()).map_err(|e| Error::Decode(Box::new(e)))?;
-
-    if bytes.len() != 32 {
-        return Ok(None);
-    }
-
-    let mut array = [0u8; 32];
-    array.copy_from_slice(&bytes);
-    Ok(Some(StaticSecret::from(array)))
+// String to static secret
+pub fn hex_to_static_secret(hex: &str) -> Option<StaticSecret> {
+    let bytes = hex::decode(hex).ok()?;
+    let arr: [u8; 32] = bytes.try_into().ok()?;
+    Some(StaticSecret::from(arr))
 }
+
+// String to XPublicKey
+/*pub fn hex_to_xpubkey(hex: &str) -> Option<XPublicKey> {
+    let bytes = hex::decode(hex).ok()?;
+    let arr: [u8; 32] = bytes.try_into().ok()?;
+    Some(XPublicKey::from(arr))
+}*/
+
+// String to nonce
+/*pub fn b64_to_nonce(b64: &str) -> Option<[u8; 24]> {
+    let bytes = general_purpose::STANDARD.decode(b64).ok()?;
+    bytes.try_into().ok()
+}*/
+
+/*
+Test decrypt memo
+let dh_secret_hex = "";
+let dh_public_hex = "";
+let memo_b64 = "";
+let nonce_b64 = "";
+
+if let (Some(secret), Some(pubkey), Some(nonce)) = (
+    hex_to_static_secret(dh_secret_hex),
+    hex_to_xpubkey(dh_public_hex),
+    b64_to_nonce(nonce_b64),
+) {
+    if let Some(plaintext) = decrypt_message(secret, &pubkey, memo_b64, nonce) {
+        println!("Mémo déchiffré : {}", plaintext);
+    } else {
+        eprintln!("Error : decrypt");
+    }
+} else {
+    eprintln!("Error : convert key");
+}
+*/

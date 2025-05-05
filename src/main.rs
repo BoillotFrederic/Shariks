@@ -42,6 +42,8 @@ async fn first_set(
         timestamp: current_timestamp(),
         referrer: "".to_string(),
         signature: "".to_string(),
+        sender_dh_public: "".to_string(),
+        recipient_dh_public: "".to_string(),
         memo: memo.to_string(),
     };
 
@@ -99,10 +101,13 @@ async fn main() -> Result<(), sqlx::Error> {
                 let sender = prompt("Sender :");
                 let recipient = prompt("Recipient :");
                 let amount: u64 = to_nanosrks(prompt("Amount :").trim().parse().unwrap_or(0.0));
-                let dh_secret_str = prompt("Secret DH :");
+                let sender_dh_public_str = prompt("Public DH :");
+                let sender_dh_secret_str = prompt("Secret DH :");
                 let private_key = prompt("Private key :");
 
                 // Memo
+                let recipient_dh_public_str =
+                    get_dh_public_key_hex_by_address(&pg_pool, &recipient).await?;
                 let recipient_dh_public =
                     match get_dh_public_key_by_address(&pg_pool, &recipient).await {
                         Ok(Some(dh_pubkey)) => dh_pubkey,
@@ -115,23 +120,28 @@ async fn main() -> Result<(), sqlx::Error> {
                             return Err(e);
                         }
                     };
-                let sender_dh_secret = match static_secret_from_hex(&dh_secret_str) {
-                    Ok(Some(secret)) => secret,
-                    Ok(None) => {
+                let sender_dh_secret = match hex_to_static_secret(&sender_dh_secret_str) {
+                    Some(secret) => secret,
+                    None => {
                         eprintln!("Error : dh_secret invalid");
                         return Ok(());
                     }
-                    Err(e) => {
-                        eprintln!("Error decoding dh_secret: {}", e);
-                        return Err(e.into());
-                    }
                 };
                 let memo_input = prompt("Memo :");
-                let (encrypted_memo, nonce) =
-                    encrypt_message(&sender_dh_secret, &recipient_dh_public, &memo_input);
+                let memo_input_truncated = &memo_input[..memo_input.len().min(255)];
+                let (encrypted_memo, nonce) = encrypt_message(
+                    &sender_dh_secret,
+                    &recipient_dh_public,
+                    &memo_input_truncated,
+                );
 
                 let nonce_encoded = base64::engine::general_purpose::STANDARD.encode(nonce);
-                let memo = format!("{}:{}", encrypted_memo, nonce_encoded);
+
+                let memo = if encrypted_memo.is_empty() {
+                    "".to_string()
+                } else {
+                    format!("{}:{}", encrypted_memo, nonce_encoded)
+                };
 
                 let signature = sign_transaction(
                     private_key,
@@ -142,7 +152,15 @@ async fn main() -> Result<(), sqlx::Error> {
                 );
 
                 if let Some(tx) = create_transaction(
-                    &ledger, &sender, &recipient, amount, &memo, &signature, &pg_pool,
+                    &ledger,
+                    &sender,
+                    &recipient,
+                    amount,
+                    &sender_dh_public_str,
+                    &recipient_dh_public_str,
+                    &memo,
+                    &signature,
+                    &pg_pool,
                 )
                 .await
                 {

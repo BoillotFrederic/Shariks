@@ -34,6 +34,8 @@ pub struct Transaction {
     pub timestamp: u128,
     pub signature: String,
     pub referrer: String,
+    pub sender_dh_public: String,
+    pub recipient_dh_public: String,
     pub memo: String,
 }
 
@@ -98,6 +100,8 @@ pub async fn create_transaction(
     sender: &str,
     recipient: &str,
     amount: u64,
+    sender_dh_public: &str,
+    recipient_dh_public: &str,
     memo: &str,
     signature: &str,
     pg_pool: &PgPool,
@@ -216,6 +220,8 @@ pub async fn create_transaction(
         timestamp: current_timestamp(),
         signature: signature.to_string(),
         referrer: sender_wallet.referrer.as_deref().unwrap_or("").to_string(),
+        sender_dh_public: sender_dh_public.to_string(),
+        recipient_dh_public: recipient_dh_public.to_string(),
         memo: memo.to_string(),
     })
 }
@@ -330,6 +336,8 @@ pub async fn distribute_initial_tokens(
             &public_sale_address,
             &recipient,
             amount,
+            "",
+            "",
             "Initial distribution",
             &signature,
             &pg_pool,
@@ -399,8 +407,8 @@ pub fn load_blockchain() -> Vec<Block> {
         Ok(f) => {
             let reader = BufReader::new(f);
             let blockchain: Vec<Block> = serde_json::from_reader(reader).unwrap_or_else(|_| {
-                println!("Error : corrupt or empty file, initializing a new string");
-                vec![]
+                println!("Error : corrupt or empty file");
+                std::process::exit(1);
             });
             println!("Blockchain loaded from '{}'", "blockchain.json");
             blockchain
