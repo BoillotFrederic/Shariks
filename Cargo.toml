@@ -2,6 +2,9 @@
 name = "Shariks"
 version = "0.1.0"
 edition = "2024"
+authors = ["NeoDev @ boillot.frederic.62@gmail.com"]
+license = "Apache-2.0"
+license-file = "LICENSE"
 
 [dependencies]
 actix-web = "4.10.2"
