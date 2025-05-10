@@ -33,3 +33,6 @@ exempt_fees_addresses.json
 
 # Env files (si tu en as)
 .env
+
+# Vault storage
+vault-data/

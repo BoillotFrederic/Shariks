@@ -1,62 +1,26 @@
 // Molduls
 mod blockchain;
+mod encryption;
+mod genesis;
+mod ledger;
 mod utils;
 mod wallet;
 
 // Dependencies
 use base64::Engine;
 use blockchain::*;
+//use dotenvy::dotenv;
+use encryption::*;
+use genesis::*;
+use ledger::*;
+//use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use std::collections::HashMap;
+//use std::env;
 use std::io;
 use utils::*;
-use uuid::Uuid;
+//use vaultrs::client::{VaultClient, VaultClientSettingsBuilder};
+//use vaultrs::kv2;
 use wallet::*;
-
-// First set
-async fn first_set(
-    blockchain: &mut Vec<Block>,
-    ledger: &mut HashMap<String, u64>,
-    pg_pool: &PgPool,
-) {
-    // Public sale
-    let public_sale_wallet =
-        create_new_wallet(false, &"PUBLIC_SALE".to_string(), "", &pg_pool).await;
-    let memo = "GENESIS";
-
-    // Transaction GENESIS
-    let fee_rule = FeeRule {
-        founder_percentage: 0,
-        treasury_percentage: 0,
-        staking_percentage: 0,
-        referral_percentage: 0,
-    };
-
-    let genesis_tx = Transaction {
-        id: Uuid::new_v4(),
-        sender: WALLET_GENESIS.to_string(),
-        recipient: public_sale_wallet.address,
-        amount: 100_000_000_000_000_000,
-        fee: 0,
-        fee_rule,
-        timestamp: current_timestamp(),
-        referrer: "".to_string(),
-        signature: "".to_string(),
-        sender_dh_public: "".to_string(),
-        recipient_dh_public: "".to_string(),
-        memo: memo.to_string(),
-    };
-
-    let genesis_block = Block::new(0, vec![genesis_tx], "0".to_string());
-    blockchain.push(genesis_block.clone());
-    update_ledger_with_block(ledger, &genesis_block);
-
-    // Transaction of distribution initial
-    distribute_initial_tokens(ledger, blockchain, &pg_pool).await;
-
-    // First block chain save
-    save_blockchain(&blockchain);
-}
 
 // Main
 #[tokio::main]
@@ -69,14 +33,14 @@ async fn main() -> Result<(), sqlx::Error> {
     let pg_pool = PgPool::connect(&database_url).await?;
 
     // Load bloackchain
-    let mut blockchain = load_blockchain();
+    let mut blockchain = blockchain::load();
 
     // Init ledger
-    let mut ledger = initialize_ledger_from_blockchain(&blockchain);
+    let mut ledger = Ledger::initialize_from_blockchain(&blockchain);
 
     // Create first transactions
     if blockchain.is_empty() {
-        first_set(&mut blockchain, &mut ledger, &pg_pool).await;
+        Genesis::start(&mut blockchain, &mut ledger, &pg_pool).await;
     }
 
     // Transaction ask
@@ -98,18 +62,20 @@ async fn main() -> Result<(), sqlx::Error> {
             .expect("Error : read line");
         match choice.trim() {
             "1" => {
-                let sender = prompt("Sender :");
-                let recipient = prompt("Recipient :");
-                let amount: u64 = to_nanosrks(prompt("Amount :").trim().parse().unwrap_or(0.0));
-                let sender_dh_public_str = prompt("Public DH :");
-                let sender_dh_secret_str = prompt("Secret DH :");
-                let private_key = prompt("Private key :");
+                let sender = Utils::prompt("Sender :");
+                let recipient = Utils::prompt("Recipient :");
+                let amount: u64 = blockchain::to_nanosrks(
+                    Utils::prompt("Amount :").trim().parse().unwrap_or(0.0),
+                );
+                let sender_dh_public_str = Utils::prompt("Public DH :");
+                let sender_dh_secret_str = Utils::prompt("Secret DH :");
+                let private_key = Utils::prompt("Private key :");
 
                 // Memo
                 let recipient_dh_public_str =
-                    get_dh_public_key_hex_by_address(&pg_pool, &recipient).await?;
+                    Encryption::get_dh_public_key_hex_by_address(&pg_pool, &recipient).await?;
                 let recipient_dh_public =
-                    match get_dh_public_key_by_address(&pg_pool, &recipient).await {
+                    match Encryption::get_dh_public_key_by_address(&pg_pool, &recipient).await {
                         Ok(Some(dh_pubkey)) => dh_pubkey,
                         Ok(None) => {
                             eprintln!("Erreur : destinataire introuvable ou pas de dh_public.");
@@ -120,16 +86,17 @@ async fn main() -> Result<(), sqlx::Error> {
                             return Err(e);
                         }
                     };
-                let sender_dh_secret = match hex_to_static_secret(&sender_dh_secret_str) {
+                let sender_dh_secret = match Encryption::hex_to_static_secret(&sender_dh_secret_str)
+                {
                     Some(secret) => secret,
                     None => {
                         eprintln!("Error : dh_secret invalid");
                         return Ok(());
                     }
                 };
-                let memo_input = prompt("Memo :");
+                let memo_input = Utils::prompt("Memo :");
                 let memo_input_truncated = &memo_input[..memo_input.len().min(255)];
-                let (encrypted_memo, nonce) = encrypt_message(
+                let (encrypted_memo, nonce) = Encryption::encrypt_message(
                     &sender_dh_secret,
                     &recipient_dh_public,
                     &memo_input_truncated,
@@ -143,7 +110,7 @@ async fn main() -> Result<(), sqlx::Error> {
                     format!("{}:{}", encrypted_memo, nonce_encoded)
                 };
 
-                let signature = sign_transaction(
+                let signature = Encryption::sign_transaction(
                     private_key,
                     sender.clone(),
                     recipient.clone(),
@@ -151,7 +118,7 @@ async fn main() -> Result<(), sqlx::Error> {
                     memo.clone(),
                 );
 
-                if let Some(tx) = create_transaction(
+                if let Some(tx) = blockchain::Transaction::create(
                     &ledger,
                     &sender,
                     &recipient,
@@ -164,22 +131,22 @@ async fn main() -> Result<(), sqlx::Error> {
                 )
                 .await
                 {
-                    let block = Block::new(
+                    let block = blockchain::Block::new(
                         blockchain.len() as u64,
                         vec![tx],
-                        get_latest_hash(&blockchain),
+                        blockchain::get_latest_hash(&blockchain),
                     );
-                    update_ledger_with_block(&mut ledger, &block);
+                    Ledger::update_with_block(&mut ledger, &block);
                     blockchain.push(block.clone());
                     println!("\nTransaction : {:?}", block);
                 }
             }
             "2" => {
-                let referrer = prompt("Godfather :");
-                let found = wallet_exists(&pg_pool, &referrer).await.unwrap_or(false);
+                let referrer = Utils::prompt("Godfather :");
+                let found = Wallet::exists(&pg_pool, &referrer).await.unwrap_or(false);
 
                 if found || referrer.is_empty() {
-                    create_new_wallet(found, "", &referrer.to_string().trim(), &pg_pool).await;
+                    Wallet::new(found, "", &referrer.to_string().trim(), &pg_pool).await;
                 } else {
                     println!("Error : the sponsor {} is not a known wallet", referrer);
                 }
@@ -191,14 +158,14 @@ async fn main() -> Result<(), sqlx::Error> {
                 }
             }
             "4" => {
-                view_balances(&ledger);
+                Ledger::view_balances(&ledger);
             }
             "5" => {
-                check_total_supply(&ledger, 100_000_000 * NANOSRKS_PER_SRKS);
+                blockchain::check_total_supply(&ledger, 100_000_000 * NANOSRKS_PER_SRKS);
             }
             "6" => {
-                let mnemonic = prompt("Mnemonic :");
-                match restore_full_keypair_from_mnemonic(&mnemonic) {
+                let mnemonic = Utils::prompt("Mnemonic :");
+                match Encryption::restore_full_keypair_from_mnemonic(&mnemonic) {
                     Ok((signing_key, verifying_key, dh_secret, dh_public)) => {
                         println!("Public key : {}", hex::encode(verifying_key.to_bytes()));
                         println!("Private key : {}", hex::encode(signing_key.to_bytes()));
@@ -209,18 +176,59 @@ async fn main() -> Result<(), sqlx::Error> {
                 }
             }
             "7" => {
-                if let Err(e) = print_all_wallets(&pg_pool).await {
+                if let Err(e) = Wallet::print_all(&pg_pool).await {
                     eprintln!("Error : print wallets : {}", e);
                 }
             }
             "8" => {
-                save_blockchain(&blockchain);
+                blockchain::save(&blockchain);
                 println!("Bye !");
                 break;
             }
+            "9" => {
+                Encryption::test();
+            } /*match test().await {
+            Ok(()) => {
+            println!("OK");
+            }
+            Err(err) => eprintln!("Error : Vault : {}", err)
+            },*/
             _ => println!("Error : invalid choise"),
         }
     }
 
     Ok(())
 }
+
+/*#[derive(Debug, Deserialize, Serialize)]
+struct WalletPrivateKey {
+    private_key: String,
+}
+async fn test() -> Result<(), Box<dyn std::error::Error>> {
+    dotenv().ok();
+
+    let vault_addr = env::var("VAULT_ADDR")?;
+    let vault_token = env::var("VAULT_TOKEN")?;
+
+    let client = VaultClient::new(
+        VaultClientSettingsBuilder::default()
+            .address(vault_addr)
+            .token(vault_token)
+            .build()?,
+    )?;
+
+    let _wallet = WalletPrivateKey {
+        private_key: "ma_private_key_test".to_string(),
+    };
+
+    // Write
+    kv2::set(&client, "secret", "shariks_wallets/public_sale", &_wallet).await?;
+
+    // Read
+    let wallet: WalletPrivateKey =
+        kv2::read(&client, "secret", "shariks_wallets/public_sale").await?;
+
+    println!("Clé privée wallet public_sale: {}", wallet.private_key);
+
+    Ok(())
+}*/
