@@ -18,8 +18,8 @@ Thumbs.db
 # Cargo files
 Cargo.lock
 
-# First set
-/first_set/
+# Owners
+/owners/
 
 # Wallet
 /referrer_counter/

@@ -1,7 +1,7 @@
 // Dependencies
-//use std::fs::File;
-//use std::fs::OpenOptions;
-use std::io::{self /*, Read, Write*/};
+use std::fs::File;
+use std::fs::OpenOptions;
+use std::io::{self, Read, Write};
 //use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -55,23 +55,24 @@ impl Utils {
     //     Ok(number)
     // }
 
-    // // Write file text
-    // pub fn write_to_file(filename: &str, content: &str) -> io::Result<()> {
-    //     let mut file = OpenOptions::new()
-    //         .create(true)
-    //         .append(true)
-    //         .open(filename)?;
-    //
-    //     writeln!(file, "{}", content)?;
-    //     Ok(())
-    // }
-    //
-    // // Read file text
-    // pub fn read_from_file(filename: &str) -> io::Result<String> {
-    //     let mut file = File::open(filename)?;
-    //     let mut content = String::new();
-    //
-    //     file.read_to_string(&mut content)?;
-    //     Ok(content)
-    // }
+    // Write file text
+    pub fn write_to_file(filename: &str, content: &str) -> io::Result<()> {
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(filename)?;
+
+        writeln!(file, "{}", content)?;
+        Ok(())
+    }
+
+    // Read file text
+    pub fn read_from_file(filename: &str) -> io::Result<String> {
+        let mut file = File::open(filename)?;
+        let mut content = String::new();
+
+        file.read_to_string(&mut content)?;
+        Ok(content)
+    }
 }

@@ -2,13 +2,13 @@
 use hex;
 use serde::{Deserialize, Serialize};
 use sqlx::{Error, PgPool};
-use std::fs::{File, OpenOptions};
-use std::io::{BufReader, BufWriter};
 
 // Crate
 use crate::blockchain;
-use crate::blockchain::*;
 use crate::encryption::*;
+use crate::utils::*;
+use crate::vault;
+use crate::vault::*;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct WalletOwner {
@@ -33,7 +33,7 @@ impl Wallet {
     // Create a new wallet
     pub async fn new(
         referrer_found: bool,
-        save_private_key: &str,
+        owner_wallet_name: &str,
         referrer: &str,
         pg_pool: &PgPool,
     ) -> Wallet {
@@ -50,7 +50,6 @@ impl Wallet {
         let address = format!("{}{}", blockchain::PREFIX_ADDRESS, public_key_hex);
 
         println!("Mnemonic : {}", phrase);
-        println!("dh_secret : {}", hex::encode(dh_secret.to_bytes()));
 
         // Check if the wallet is one of the first 100 referrals of the referrer
         let is_first_referrer = if referrer_found {
@@ -78,12 +77,23 @@ impl Wallet {
         };
 
         // If it is a owner wallet then we save the private key
-        if !save_private_key.is_empty() {
-            let owner = WalletOwner {
-                public_key: public_key_hex,
-                private_key: private_key_hex,
+        if !owner_wallet_name.is_empty() {
+            let owner_secret = vault::WalletSecret {
+                mnemonic: phrase.clone(),
+                public_key: public_key_hex.clone(),
+                private_key: private_key_hex.clone(),
+                dh_public: hex::encode(dh_public.as_bytes()),
+                dh_secret: hex::encode(dh_secret.to_bytes()),
             };
-            Self::save_owner(format!("first_set\\{}", save_private_key), owner);
+
+            match VaultService::set_owner_secret(owner_wallet_name, owner_secret).await {
+                Ok(()) => {
+                    println!("Secret : {} has been set", owner_wallet_name);
+                }
+                Err(err) => eprintln!("Error : Vault : {}", err),
+            }
+
+            Utils::write_to_file(&format!("owners\\{}", owner_wallet_name), &address).unwrap();
         }
 
         // The wallet struct
@@ -203,40 +213,9 @@ impl Wallet {
         Ok(exists.unwrap_or(false))
     }
 
-    // Save wallet owner
-    pub fn save_owner(path: String, owner: WalletOwner) {
-        let file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(path)
-            .expect("Error : unable to open output file");
-
-        let writer = BufWriter::new(file);
-        serde_json::to_writer_pretty(writer, &owner).expect("Error : serializing owner");
-    }
-
-    // Load wallet owner
-    pub fn load_owner(path: String) -> WalletOwner {
-        let file = File::open(path.clone()).expect("Error : WalletOwner file not found");
-        let reader = BufReader::new(file);
-        let wallet_owner: WalletOwner =
-            serde_json::from_reader(reader).expect("Error : impossible read WalletOwner");
-        wallet_owner
-    }
-
-    pub fn get_owner_address(name: String) -> String {
-        let path = "first_set\\";
-        return format!(
-            "{}{}",
-            PREFIX_ADDRESS,
-            Self::load_owner(format!("{}{}", path, name)).public_key
-        );
-    }
-
-    pub fn get_owner_privatekey(name: String) -> String {
-        let path = "first_set\\";
-        return Self::load_owner(format!("{}{}", path, name)).private_key;
+    // Add prefix
+    pub fn add_prefix(public_key: &str) -> String {
+        return format!("{}{}", blockchain::PREFIX_ADDRESS, public_key);
     }
 
     // Print all wallets

@@ -4,22 +4,18 @@ mod encryption;
 mod genesis;
 mod ledger;
 mod utils;
+mod vault;
 mod wallet;
 
 // Dependencies
 use base64::Engine;
 use blockchain::*;
-//use dotenvy::dotenv;
 use encryption::*;
 use genesis::*;
 use ledger::*;
-//use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-//use std::env;
 use std::io;
 use utils::*;
-//use vaultrs::client::{VaultClient, VaultClientSettingsBuilder};
-//use vaultrs::kv2;
 use wallet::*;
 
 // Main
@@ -40,7 +36,9 @@ async fn main() -> Result<(), sqlx::Error> {
 
     // Create first transactions
     if blockchain.is_empty() {
-        Genesis::start(&mut blockchain, &mut ledger, &pg_pool).await;
+        Genesis::start(&mut blockchain, &mut ledger, &pg_pool)
+            .await
+            .unwrap();
     }
 
     // Transaction ask
@@ -185,50 +183,9 @@ async fn main() -> Result<(), sqlx::Error> {
                 println!("Bye !");
                 break;
             }
-            "9" => {
-                Encryption::test();
-            } /*match test().await {
-            Ok(()) => {
-            println!("OK");
-            }
-            Err(err) => eprintln!("Error : Vault : {}", err)
-            },*/
             _ => println!("Error : invalid choise"),
         }
     }
 
     Ok(())
 }
-
-/*#[derive(Debug, Deserialize, Serialize)]
-struct WalletPrivateKey {
-    private_key: String,
-}
-async fn test() -> Result<(), Box<dyn std::error::Error>> {
-    dotenv().ok();
-
-    let vault_addr = env::var("VAULT_ADDR")?;
-    let vault_token = env::var("VAULT_TOKEN")?;
-
-    let client = VaultClient::new(
-        VaultClientSettingsBuilder::default()
-            .address(vault_addr)
-            .token(vault_token)
-            .build()?,
-    )?;
-
-    let _wallet = WalletPrivateKey {
-        private_key: "ma_private_key_test".to_string(),
-    };
-
-    // Write
-    kv2::set(&client, "secret", "shariks_wallets/public_sale", &_wallet).await?;
-
-    // Read
-    let wallet: WalletPrivateKey =
-        kv2::read(&client, "secret", "shariks_wallets/public_sale").await?;
-
-    println!("Clé privée wallet public_sale: {}", wallet.private_key);
-
-    Ok(())
-}*/

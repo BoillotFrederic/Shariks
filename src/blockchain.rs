@@ -248,12 +248,10 @@ impl Transaction {
         let shares = Self::split_fee_exact(fee, &percentages);
 
         // Get wallets
-        let public_sale_wallet = Wallet::load_owner(format!("first_set\\{}", "PUBLIC_SALE"));
-        let founder_wallet = Wallet::load_owner(format!("first_set\\{}", "FOUNDER"));
-        let staking_wallet = Wallet::load_owner(format!("first_set\\{}", "STAKING"));
-        let public_sale_address = format!("{}{}", PREFIX_ADDRESS, public_sale_wallet.public_key);
-        let founder_address = format!("{}{}", PREFIX_ADDRESS, founder_wallet.public_key);
-        let staking_address = format!("{}{}", PREFIX_ADDRESS, staking_wallet.public_key);
+        let public_sale_address =
+            Utils::read_from_file(&format!("owners\\{}", "PUBLIC_SALE")).unwrap();
+        let founder_address = Utils::read_from_file(&format!("owners\\{}", "FOUNDER")).unwrap();
+        let staking_address = Utils::read_from_file(&format!("owners\\{}", "STAKING")).unwrap();
 
         // Update ledger
         *ledger.entry(founder_address.clone()).or_insert(0) += shares[0];
@@ -326,8 +324,8 @@ pub fn check_total_supply(ledger: &ledger::LedgerMap, expected_total: u64) -> bo
         true
     } else {
         println!("Error : total supply incorrect");
-        println!("Total actuel : {} SRKS", to_srks(total));
-        println!("Total attendu : {} SRKS", to_srks(expected_total));
+        println!("Current : {} SRKS", to_srks(total));
+        println!("Expected : {} SRKS", to_srks(expected_total));
         false
     }
 }

@@ -9,19 +9,22 @@ use crate::blockchain::*;
 use crate::encryption::*;
 use crate::ledger;
 use crate::ledger::*;
+use crate::vault::*;
 use crate::wallet::*;
 
 // Structures
 pub struct Genesis;
 
-// Genesis class
+// Genesis
+// -------
+
 impl Genesis {
     // Start genesis
     pub async fn start(
         blockchain: &mut Vec<blockchain::Block>,
         ledger: &mut ledger::LedgerMap,
         pg_pool: &PgPool,
-    ) {
+    ) -> Result<(), Box<dyn std::error::Error>> {
         // Public sale
         let public_sale_wallet = Wallet::new(false, &"PUBLIC_SALE".to_string(), "", &pg_pool).await;
         let memo = "GENESIS";
@@ -54,10 +57,12 @@ impl Genesis {
         Ledger::update_with_block(ledger, &genesis_block);
 
         // Transaction of distribution initial
-        Self::distribute(ledger, blockchain, &pg_pool).await;
+        Self::distribute(ledger, blockchain, &pg_pool).await?;
 
         // First block chain save
         blockchain::save(&blockchain);
+
+        Ok(())
     }
 
     // Distribute tokens
@@ -65,35 +70,29 @@ impl Genesis {
         ledger: &mut ledger::LedgerMap,
         blockchain: &mut blockchain::Blockchain,
         pg_pool: &PgPool,
-    ) {
+    ) -> Result<(), Box<dyn std::error::Error>> {
         // Public sale
-        let public_sale_address = Wallet::get_owner_address("PUBLIC_SALE".to_string());
-        let public_sale_private_key = Wallet::get_owner_privatekey("PUBLIC_SALE".to_string());
-        let public_sale_wallet = Wallet::find(&pg_pool, &public_sale_address).await.unwrap();
+        let public_sale_secret = VaultService::get_owner_secret(&"PUBLIC_SALE".to_string()).await?;
+        let public_sale_address = Wallet::add_prefix(&public_sale_secret.public_key);
 
-        if let Err(e) = Wallet::add_exempt_fee(&pg_pool, &public_sale_wallet.address).await {
+        if let Err(e) = Wallet::add_exempt_fee(&pg_pool, &public_sale_address).await {
             eprintln!("Error : add exempt_fees_address : {}", e);
         }
 
         // Wallets to be created
         let wallet_names = vec!["FOUNDER", "SPONSORSHIP", "TREASURY", "STAKING"];
-
+        let mut wallet_addresses: Vec<String> = Vec::new();
         for wallet_name in wallet_names.iter() {
             let wallet = Wallet::new(false, wallet_name, "", &pg_pool).await;
+            wallet_addresses.push(wallet.address.clone());
             if let Err(e) = Wallet::add_exempt_fee(&pg_pool, &wallet.address).await {
                 eprintln!("Error : add exempt_fees_address : {}", e);
             }
         }
 
         let distribution = vec![
-            (
-                Wallet::get_owner_address("SPONSORSHIP".to_string()),
-                10_000_000 * NANOSRKS_PER_SRKS,
-            ),
-            (
-                Wallet::get_owner_address("TREASURY".to_string()),
-                10_000_000 * NANOSRKS_PER_SRKS,
-            ),
+            (&wallet_addresses[1], 10_000_000 * NANOSRKS_PER_SRKS),
+            (&wallet_addresses[2], 10_000_000 * NANOSRKS_PER_SRKS),
         ];
 
         let mut transactions = Vec::new();
@@ -101,7 +100,7 @@ impl Genesis {
         for (recipient, amount) in distribution {
             // Signature
             let signature = Encryption::sign_transaction(
-                public_sale_private_key.to_string(),
+                public_sale_secret.private_key.clone(),
                 public_sale_address.clone(),
                 recipient.clone(),
                 amount,
@@ -127,6 +126,7 @@ impl Genesis {
             }
         }
 
+        // Create a new block
         if !transactions.is_empty() {
             let previous_block = blockchain.last().unwrap();
             let index = previous_block.index + 1;
@@ -146,5 +146,7 @@ impl Genesis {
 
             blockchain.push(finalized_block);
         }
+
+        Ok(())
     }
 }

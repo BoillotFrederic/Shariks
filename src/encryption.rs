@@ -41,7 +41,7 @@ impl Encryption {
     }
 
     // Decrypt message
-    pub fn decrypt_message(
+    /*pub fn decrypt_message(
         dh_secret: StaticSecret,
         dh_public: &XPublicKey,
         ciphertext_b64: &str,
@@ -56,7 +56,7 @@ impl Encryption {
             .ok()?;
 
         String::from_utf8(decrypted).ok()
-    }
+    }*/
 
     // Generate key pair from mnemonic
     pub fn generate_full_keypair_from_mnemonic()
@@ -216,20 +216,20 @@ impl Encryption {
     }
 
     // String to XPublicKey
-    pub fn hex_to_xpubkey(hex: &str) -> Option<XPublicKey> {
+    /*pub fn hex_to_xpubkey(hex: &str) -> Option<XPublicKey> {
         let bytes = hex::decode(hex).ok()?;
         let arr: [u8; 32] = bytes.try_into().ok()?;
         Some(XPublicKey::from(arr))
-    }
+    }*/
 
     // String to nonce
-    pub fn b64_to_nonce(b64: &str) -> Option<[u8; 24]> {
+    /*pub fn b64_to_nonce(b64: &str) -> Option<[u8; 24]> {
         let bytes = general_purpose::STANDARD.decode(b64).ok()?;
         bytes.try_into().ok()
-    }
+    }*/
 
     //Test decrypt memo
-    pub fn test() {
+    /*pub fn test() {
         let dh_secret_hex = "";
         let dh_public_hex = "";
         let memo_b64 = "";
@@ -248,5 +248,5 @@ impl Encryption {
         } else {
             eprintln!("Error : convert key");
         }
-    }
+    }*/
 }
