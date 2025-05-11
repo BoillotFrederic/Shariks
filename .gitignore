@@ -36,3 +36,6 @@ exempt_fees_addresses.json
 
 # Vault storage
 vault-data/
+init_vault.ps1
+shariks_policy.hcl
+vault.hcl

@@ -16,6 +16,7 @@ use ledger::*;
 use sqlx::PgPool;
 use std::io;
 use utils::*;
+//use vault::*;
 use wallet::*;
 
 // Main
@@ -23,8 +24,9 @@ use wallet::*;
 async fn main() -> Result<(), sqlx::Error> {
     println!("Initialization start");
 
-    // Connect to database
+    // Connect to dotenv
     dotenvy::dotenv().ok();
+
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL not set");
     let pg_pool = PgPool::connect(&database_url).await?;
 
@@ -36,9 +38,10 @@ async fn main() -> Result<(), sqlx::Error> {
 
     // Create first transactions
     if blockchain.is_empty() {
-        Genesis::start(&mut blockchain, &mut ledger, &pg_pool)
-            .await
-            .unwrap();
+        match Genesis::start(&mut blockchain, &mut ledger, &pg_pool).await {
+            Ok(()) => {}
+            Err(e) => println!("Error : {}", e),
+        };
     }
 
     // Transaction ask

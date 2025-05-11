@@ -201,7 +201,9 @@ impl Transaction {
             if *balance < total {
                 println!(
                     "Error : not enough tokens. current number of tokens {} : {}, required : {}",
-                    sender, balance, total
+                    sender,
+                    super::to_srks(*balance),
+                    super::to_srks(total)
                 );
                 return None;
             }
