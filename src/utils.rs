@@ -1,4 +1,5 @@
 // Dependencies
+use rpassword::read_password;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::{self, Read, Write};
@@ -25,6 +26,12 @@ impl Utils {
             .read_line(&mut _prompt)
             .expect("Error : read line");
         _prompt.trim().to_string()
+    }
+
+    // Secret prompt
+    pub fn prompt_secret(text: &str) -> String {
+        println!("{}", text);
+        read_password().unwrap_or_else(|_| "".to_string())
     }
 
     // Current date

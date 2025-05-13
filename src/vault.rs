@@ -10,6 +10,7 @@ use vaultrs::kv2;
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct WalletSecret {
     pub mnemonic: String,
+    pub passphrase: String,
     pub public_key: String,
     pub private_key: String,
     pub dh_public: String,
@@ -68,6 +69,7 @@ impl VaultService {
         // Default
         let secret = result.unwrap_or(WalletSecret {
             mnemonic: "".to_string(),
+            passphrase: "".to_string(),
             public_key: "".to_string(),
             private_key: "".to_string(),
             dh_public: "".to_string(),

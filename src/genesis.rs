@@ -1,5 +1,6 @@
 // Dependencies
 use sqlx::PgPool;
+use std::env;
 use uuid::Uuid;
 
 // Crates
@@ -26,7 +27,15 @@ impl Genesis {
         pg_pool: &PgPool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Public sale
-        let public_sale_wallet = Wallet::new(false, &"PUBLIC_SALE".to_string(), "", &pg_pool).await;
+        let genesis_passphrase = env::var("GENESIS_PASSPHRASE")?;
+        let public_sale_wallet = Wallet::new(
+            false,
+            &"PUBLIC_SALE".to_string(),
+            "",
+            &genesis_passphrase,
+            &pg_pool,
+        )
+        .await;
         let memo = "GENESIS";
 
         // Transaction GENESIS
@@ -81,9 +90,10 @@ impl Genesis {
 
         // Wallets to be created
         let wallet_names = vec!["FOUNDER", "SPONSORSHIP", "TREASURY", "STAKING"];
+        let genesis_passphrase = env::var("GENESIS_PASSPHRASE")?;
         let mut wallet_addresses: Vec<String> = Vec::new();
         for wallet_name in wallet_names.iter() {
-            let wallet = Wallet::new(false, wallet_name, "", &pg_pool).await;
+            let wallet = Wallet::new(false, wallet_name, "", &genesis_passphrase, &pg_pool).await;
             wallet_addresses.push(wallet.address.clone());
             if let Err(e) = Wallet::add_exempt_fee(&pg_pool, &wallet.address).await {
                 eprintln!("Error : add exempt_fees_address : {}", e);

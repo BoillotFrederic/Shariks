@@ -35,11 +35,12 @@ impl Wallet {
         referrer_found: bool,
         owner_wallet_name: &str,
         referrer: &str,
+        passphrase: &str,
         pg_pool: &PgPool,
     ) -> Wallet {
         // Keypair generate
         let (phrase, signing_key, verifying_key, dh_secret, dh_public) =
-            Encryption::generate_full_keypair_from_mnemonic();
+            Encryption::generate_full_keypair_from_mnemonic(passphrase);
 
         let private_key_bytes = signing_key.to_bytes();
         let public_key_bytes = verifying_key.to_bytes();
@@ -80,6 +81,7 @@ impl Wallet {
         if !owner_wallet_name.is_empty() {
             let owner_secret = vault::WalletSecret {
                 mnemonic: phrase.clone(),
+                passphrase: passphrase.to_string(),
                 public_key: public_key_hex.clone(),
                 private_key: private_key_hex.clone(),
                 dh_public: hex::encode(dh_public.as_bytes()),

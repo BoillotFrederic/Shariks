@@ -54,7 +54,8 @@ async fn main() -> Result<(), sqlx::Error> {
         println!("5. Check total supply");
         println!("6. View keypair with mnemonic");
         println!("7. Wallets list");
-        println!("8. Save and quit");
+        println!("8. Decrypt memo");
+        println!("9. Save and quit");
 
         let mut choice = String::new();
 
@@ -69,8 +70,8 @@ async fn main() -> Result<(), sqlx::Error> {
                     Utils::prompt("Amount :").trim().parse().unwrap_or(0.0),
                 );
                 let sender_dh_public_str = Utils::prompt("Public DH :");
-                let sender_dh_secret_str = Utils::prompt("Secret DH :");
-                let private_key = Utils::prompt("Private key :");
+                let sender_dh_secret_str = Utils::prompt_secret("Secret DH :");
+                let private_key = Utils::prompt_secret("Private key :");
 
                 // Memo
                 let recipient_dh_public_str =
@@ -144,10 +145,11 @@ async fn main() -> Result<(), sqlx::Error> {
             }
             "2" => {
                 let referrer = Utils::prompt("Godfather :");
+                let passphrase = Utils::prompt_secret("Passphrase :");
                 let found = Wallet::exists(&pg_pool, &referrer).await.unwrap_or(false);
 
                 if found || referrer.is_empty() {
-                    Wallet::new(found, "", &referrer.to_string().trim(), &pg_pool).await;
+                    Wallet::new(found, "", &referrer.trim(), &passphrase, &pg_pool).await;
                 } else {
                     println!("Error : the sponsor {} is not a known wallet", referrer);
                 }
@@ -166,7 +168,8 @@ async fn main() -> Result<(), sqlx::Error> {
             }
             "6" => {
                 let mnemonic = Utils::prompt("Mnemonic :");
-                match Encryption::restore_full_keypair_from_mnemonic(&mnemonic) {
+                let passphrase = Utils::prompt_secret("Passphrase :");
+                match Encryption::restore_full_keypair_from_mnemonic(&mnemonic, &passphrase) {
                     Ok((signing_key, verifying_key, dh_secret, dh_public)) => {
                         println!("Public key : {}", hex::encode(verifying_key.to_bytes()));
                         println!("Private key : {}", hex::encode(signing_key.to_bytes()));
@@ -182,6 +185,15 @@ async fn main() -> Result<(), sqlx::Error> {
                 }
             }
             "8" => {
+                let memo = Utils::prompt("Memo : ");
+                let dh_public = Utils::prompt("DH public : ");
+                let dh_secret = Utils::prompt("DH secret : ");
+
+                let memo_decrypted =
+                    blockchain::Transaction::decrypt_memo(&memo, &dh_secret, &dh_public);
+                println!("{}", memo_decrypted);
+            }
+            "9" => {
                 blockchain::save(&blockchain);
                 println!("Bye !");
                 break;

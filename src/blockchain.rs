@@ -280,6 +280,32 @@ impl Transaction {
 
         shares
     }
+
+    // Decrypt memo
+    pub fn decrypt_memo(memo: &str, dh_secret: &str, dh_public: &str) -> String {
+        if let Some((memo_b64, nonce_b64)) = memo.split_once(':') {
+            if let (Some(secret), Some(pubkey), Some(nonce)) = (
+                Encryption::hex_to_static_secret(dh_secret),
+                Encryption::hex_to_xpubkey(dh_public),
+                Encryption::b64_to_nonce(nonce_b64),
+            ) {
+                if let Some(plaintext) =
+                    Encryption::decrypt_message(secret, &pubkey, memo_b64, nonce)
+                {
+                    plaintext
+                } else {
+                    eprintln!("Error : decrypt");
+                    "".to_string()
+                }
+            } else {
+                eprintln!("Error : convert key");
+                "".to_string()
+            }
+        } else {
+            eprintln!("Error : separator");
+            "".to_string()
+        }
+    }
 }
 
 // Save blockchain

@@ -41,7 +41,7 @@ impl Encryption {
     }
 
     // Decrypt message
-    /*pub fn decrypt_message(
+    pub fn decrypt_message(
         dh_secret: StaticSecret,
         dh_public: &XPublicKey,
         ciphertext_b64: &str,
@@ -56,14 +56,15 @@ impl Encryption {
             .ok()?;
 
         String::from_utf8(decrypted).ok()
-    }*/
+    }
 
     // Generate key pair from mnemonic
-    pub fn generate_full_keypair_from_mnemonic()
-    -> (String, SigningKey, VerifyingKey, StaticSecret, XPublicKey) {
+    pub fn generate_full_keypair_from_mnemonic(
+        passphrase: &str,
+    ) -> (String, SigningKey, VerifyingKey, StaticSecret, XPublicKey) {
         let mnemonic = Mnemonic::generate(12).unwrap();
         let phrase = mnemonic.to_string();
-        let seed = mnemonic.to_seed("");
+        let seed = mnemonic.to_seed(passphrase);
 
         // Ed25519 keypair
         let seed_ed: &[u8; 32] = &seed[..32].try_into().expect("Error : seed < 32 bytes");
@@ -81,9 +82,10 @@ impl Encryption {
     // Restore key pair from mnemonic
     pub fn restore_full_keypair_from_mnemonic(
         phrase: &str,
+        passphrase: &str,
     ) -> Result<(SigningKey, VerifyingKey, StaticSecret, XPublicKey), String> {
         let mnemonic = Mnemonic::parse(phrase).expect("Error : invalid mnemonic phrase");
-        let seed = mnemonic.to_seed("");
+        let seed = mnemonic.to_seed(passphrase);
 
         // Ed25519 keypair
         let seed_ed: [u8; 32] = seed[..32].try_into().expect("Error : seed < 32 bytes");
@@ -214,7 +216,7 @@ impl Encryption {
         let arr: [u8; 32] = bytes.try_into().ok()?;
         Some(StaticSecret::from(arr))
     }
-    /*
+
     // String to XPublicKey
     pub fn hex_to_xpubkey(hex: &str) -> Option<XPublicKey> {
         let bytes = hex::decode(hex).ok()?;
@@ -227,26 +229,4 @@ impl Encryption {
         let bytes = general_purpose::STANDARD.decode(b64).ok()?;
         bytes.try_into().ok()
     }
-
-    //Test decrypt memo
-    pub fn test() {
-        let dh_secret_hex = "";
-        let dh_public_hex = "";
-        let memo_b64 = "";
-        let nonce_b64 = "";
-
-        if let (Some(secret), Some(pubkey), Some(nonce)) = (
-            Self::hex_to_static_secret(dh_secret_hex),
-            Self::hex_to_xpubkey(dh_public_hex),
-            Self::b64_to_nonce(nonce_b64),
-        ) {
-            if let Some(plaintext) = Self::decrypt_message(secret, &pubkey, memo_b64, nonce) {
-                println!("Mémo déchiffré : {}", plaintext);
-            } else {
-                eprintln!("Error : decrypt");
-            }
-        } else {
-            eprintln!("Error : convert key");
-        }
-    }*/
 }
