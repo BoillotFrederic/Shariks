@@ -8,7 +8,6 @@ use crate::Utils;
 use crate::blockchain;
 use crate::blockchain::*;
 use crate::encryption::*;
-use crate::ledger;
 use crate::ledger::*;
 use crate::vault::*;
 use crate::wallet::*;
@@ -21,11 +20,7 @@ pub struct Genesis;
 
 impl Genesis {
     // Start genesis
-    pub async fn start(
-        blockchain: &mut Vec<blockchain::Block>,
-        ledger: &mut ledger::LedgerMap,
-        pg_pool: &PgPool,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn start(pg_pool: &PgPool) -> Result<(), Box<dyn std::error::Error>> {
         // Public sale
         let genesis_passphrase = env::var("GENESIS_PASSPHRASE")?;
         let public_sale_wallet = Wallet::new(
@@ -61,25 +56,23 @@ impl Genesis {
             memo: memo.to_string(),
         };
 
-        let genesis_block = blockchain::Block::new(0, vec![genesis_tx], "0".to_string());
-        blockchain.push(genesis_block.clone());
-        Ledger::update_with_block(ledger, &genesis_block);
+        let genesis_block = blockchain::Block::new(0, vec![genesis_tx.clone()], "0".to_string());
+
+        let mut query_sync = pg_pool.begin().await?;
+        blockchain::Block::save_to_db(&genesis_block, &mut query_sync).await?;
+        blockchain::Transaction::save_to_db(&genesis_tx, genesis_block.index, &mut query_sync)
+            .await?;
+        Ledger::apply_transaction(&genesis_tx, &mut query_sync).await?;
+        query_sync.commit().await?;
 
         // Transaction of distribution initial
-        Self::distribute(ledger, blockchain, &pg_pool).await?;
-
-        // First block chain save
-        blockchain::save(&blockchain);
+        Self::distribute(&pg_pool).await?;
 
         Ok(())
     }
 
     // Distribute tokens
-    async fn distribute(
-        ledger: &mut ledger::LedgerMap,
-        blockchain: &mut blockchain::Blockchain,
-        pg_pool: &PgPool,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    async fn distribute(pg_pool: &PgPool) -> Result<(), Box<dyn std::error::Error>> {
         // Public sale
         let public_sale_secret = VaultService::get_owner_secret(&"PUBLIC_SALE".to_string()).await?;
         let public_sale_address = Wallet::add_prefix(&public_sale_secret.public_key);
@@ -105,6 +98,7 @@ impl Genesis {
             (&wallet_addresses[2], 10_000_000 * NANOSRKS_PER_SRKS),
         ];
 
+        let mut query_sync = pg_pool.begin().await?;
         let mut transactions = Vec::new();
 
         for (recipient, amount) in distribution {
@@ -119,7 +113,6 @@ impl Genesis {
 
             // Transaction
             if let Some(tx) = blockchain::Transaction::create(
-                ledger,
                 &public_sale_address,
                 &recipient,
                 amount,
@@ -131,17 +124,17 @@ impl Genesis {
             )
             .await
             {
-                Ledger::apply_transaction(ledger, &tx);
+                Ledger::apply_transaction(&tx, &mut query_sync).await?;
                 transactions.push(tx);
             }
         }
 
         // Create a new block
         if !transactions.is_empty() {
-            let previous_block = blockchain.last().unwrap();
-            let index = previous_block.index + 1;
+            let (last_index, last_hash) = blockchain::Block::get_last_block_meta(&pg_pool).await?;
+            let index = last_index + 1;
             let timestamp = Utils::current_timestamp();
-            let previous_hash = previous_block.hash.clone();
+            let previous_hash = last_hash;
 
             let block = Block {
                 index,
@@ -154,7 +147,13 @@ impl Genesis {
             let mut finalized_block = block;
             finalized_block.hash = finalized_block.calculate_hash();
 
-            blockchain.push(finalized_block);
+            blockchain::Block::save_to_db(&finalized_block, &mut query_sync).await?;
+            for tx in &finalized_block.transactions {
+                blockchain::Transaction::save_to_db(tx, finalized_block.index, &mut query_sync)
+                    .await?;
+            }
+
+            query_sync.commit().await?;
         }
 
         Ok(())

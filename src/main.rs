@@ -27,18 +27,13 @@ async fn main() -> Result<(), sqlx::Error> {
     // Connect to dotenv
     dotenvy::dotenv().ok();
 
+    // Connect to database
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL not set");
     let pg_pool = PgPool::connect(&database_url).await?;
 
-    // Load bloackchain
-    let mut blockchain = blockchain::load();
-
-    // Init ledger
-    let mut ledger = Ledger::initialize_from_blockchain(&blockchain);
-
     // Create first transactions
-    if blockchain.is_empty() {
-        match Genesis::start(&mut blockchain, &mut ledger, &pg_pool).await {
+    if blockchain::is_empty(&pg_pool).await? {
+        match Genesis::start(&pg_pool).await {
             Ok(()) => {}
             Err(e) => println!("Error : {}", e),
         };
@@ -55,7 +50,7 @@ async fn main() -> Result<(), sqlx::Error> {
         println!("6. View keypair with mnemonic");
         println!("7. Wallets list");
         println!("8. Decrypt memo");
-        println!("9. Save and quit");
+        println!("9. Quit");
 
         let mut choice = String::new();
 
@@ -121,7 +116,6 @@ async fn main() -> Result<(), sqlx::Error> {
                 );
 
                 if let Some(tx) = blockchain::Transaction::create(
-                    &ledger,
                     &sender,
                     &recipient,
                     amount,
@@ -133,13 +127,17 @@ async fn main() -> Result<(), sqlx::Error> {
                 )
                 .await
                 {
-                    let block = blockchain::Block::new(
-                        blockchain.len() as u64,
-                        vec![tx],
-                        blockchain::get_latest_hash(&blockchain),
-                    );
-                    Ledger::update_with_block(&mut ledger, &block);
-                    blockchain.push(block.clone());
+                    let (last_index, last_hash) =
+                        blockchain::Block::get_last_block_meta(&pg_pool).await?;
+                    let block = blockchain::Block::new(last_index + 1, vec![tx.clone()], last_hash);
+
+                    // Finalize transaction
+                    let mut query_sync = pg_pool.begin().await?;
+                    blockchain::Block::save_to_db(&block, &mut query_sync).await?;
+                    blockchain::Transaction::save_to_db(&tx, block.index, &mut query_sync).await?;
+                    Ledger::apply_transaction(&tx, &mut query_sync).await?;
+                    query_sync.commit().await?;
+
                     println!("\nTransaction : {:?}", block);
                 }
             }
@@ -155,16 +153,17 @@ async fn main() -> Result<(), sqlx::Error> {
                 }
             }
             "3" => {
-                for block in &blockchain {
-                    println!("\n Block n°{} :", block.index);
+                let blocks = blockchain::load_blocks_from_db(&pg_pool).await?;
+                for block in &blocks {
+                    println!("\nBlock n°{} :", block.index);
                     println!("{:#?}", block);
                 }
             }
             "4" => {
-                Ledger::view_balances(&ledger);
+                Ledger::view_balances(&pg_pool).await?;
             }
             "5" => {
-                blockchain::check_total_supply(&ledger, 100_000_000 * NANOSRKS_PER_SRKS);
+                Ledger::check_total_supply(&pg_pool, 100_000_000 * NANOSRKS_PER_SRKS).await?;
             }
             "6" => {
                 let mnemonic = Utils::prompt("Mnemonic :");
@@ -187,17 +186,17 @@ async fn main() -> Result<(), sqlx::Error> {
             "8" => {
                 let memo = Utils::prompt("Memo : ");
                 let dh_public = Utils::prompt("DH public : ");
-                let dh_secret = Utils::prompt("DH secret : ");
+                let dh_secret = Utils::prompt_secret("DH secret : ");
 
                 let memo_decrypted =
                     blockchain::Transaction::decrypt_memo(&memo, &dh_secret, &dh_public);
                 println!("{}", memo_decrypted);
             }
             "9" => {
-                blockchain::save(&blockchain);
                 println!("Bye !");
                 break;
             }
+
             _ => println!("Error : invalid choise"),
         }
     }

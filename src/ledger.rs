@@ -1,86 +1,129 @@
 // Dependencies
-use std::collections::HashMap;
+use sqlx::{Error, PgPool, Postgres, Transaction as QuerySync};
 
 // Crates
 use crate::Utils;
 use crate::blockchain;
 use crate::blockchain::*;
 
-// Types
-pub type LedgerMap = HashMap<String, u64>;
-
 // Ledger
 // ------
 
 pub struct Ledger;
 impl Ledger {
-    // Initialize ledger from blockchain
-    pub fn initialize_from_blockchain(blockchain: &Vec<blockchain::Block>) -> LedgerMap {
-        let mut ledger: LedgerMap = HashMap::new();
-
-        for block in blockchain {
-            for tx in &block.transactions {
-                if tx.sender != format!("{}{}", blockchain::PREFIX_ADDRESS, "genesis") {
-                    *ledger.entry(tx.sender.clone()).or_insert(0) -= tx.amount + tx.fee;
-                }
-
-                *ledger.entry(tx.recipient.clone()).or_insert(0) += tx.amount;
-
-                super::blockchain::Transaction::distribute_fee(
-                    &mut ledger,
-                    tx.fee,
-                    tx.fee_rule.clone(),
-                    tx.referrer.to_string(),
-                );
-            }
-        }
-
-        ledger
-    }
-
-    // Update ledger with block
-    pub fn update_with_block(ledger: &mut LedgerMap, block: &Block) {
-        for tx in &block.transactions {
-            if !Self::apply_transaction(ledger, tx) {
-                println!("Warning: transaction {:?} failed to apply", tx);
-            }
-        }
-    }
-
     // Apply transaction
-    pub fn apply_transaction(ledger: &mut LedgerMap, tx: &Transaction) -> bool {
-        let sender_balance = ledger.get(&tx.sender).unwrap_or(&0);
+    pub async fn apply_transaction(
+        tx: &Transaction,
+        query_sync: &mut QuerySync<'_, Postgres>,
+    ) -> Result<(), sqlx::Error> {
         let total = tx.amount + tx.fee;
         let genesis = format!("{}{}", blockchain::PREFIX_ADDRESS, "genesis");
 
-        if *sender_balance >= total || tx.sender == genesis {
-            if tx.sender != genesis {
-                *ledger.entry(tx.sender.clone()).or_insert(0) -= total;
+        // Sender amount
+        if tx.sender != genesis {
+            let sender_balance: i64 = sqlx::query_scalar!(
+                "SELECT balance FROM wallet_balances WHERE address = $1",
+                tx.sender
+            )
+            .fetch_one(&mut **query_sync)
+            .await?;
+
+            if sender_balance < total as i64 {
+                return Err(sqlx::Error::RowNotFound);
             }
-            *ledger.entry(tx.recipient.clone()).or_insert(0) += tx.amount;
 
-            super::blockchain::Transaction::distribute_fee(
-                ledger,
-                tx.fee,
-                tx.fee_rule.clone(),
-                tx.referrer.to_string(),
-            );
+            sqlx::query!(
+                "UPDATE wallet_balances SET balance = balance - $1 WHERE address = $2",
+                total as i64,
+                tx.sender
+            )
+            .execute(&mut **query_sync)
+            .await?;
+        }
 
-            true
+        // Payment
+        sqlx::query!(
+            "INSERT INTO wallet_balances (address, balance)
+         VALUES ($1, $2)
+         ON CONFLICT (address) DO UPDATE SET balance = wallet_balances.balance + $2",
+            tx.recipient,
+            tx.amount as i64
+        )
+        .execute(&mut **query_sync)
+        .await?;
+
+        // Fee distributions
+        for (addr, amount) in blockchain::Transaction::fee_distributions(
+            tx.fee,
+            tx.fee_rule.clone(),
+            tx.referrer.clone(),
+        ) {
+            sqlx::query!(
+                "INSERT INTO wallet_balances (address, balance)
+             VALUES ($1, $2)
+             ON CONFLICT (address) DO UPDATE SET balance = wallet_balances.balance + $2",
+                addr,
+                amount as i64
+            )
+            .execute(&mut **query_sync)
+            .await?;
+        }
+
+        Ok(())
+    }
+
+    // Check integrity
+    pub async fn check_total_supply(
+        pool: &PgPool,
+        expected_total: u64,
+    ) -> Result<bool, sqlx::Error> {
+        let row = sqlx::query!("SELECT SUM(balance)::BIGINT AS total FROM wallet_balances")
+            .fetch_one(pool)
+            .await?;
+
+        let total_u64 = row.total.unwrap_or(0).max(0) as u64;
+
+        if total_u64 == expected_total {
+            println!("Total supply is correct : {} SRKS", to_srks(total_u64));
+            Ok(true)
         } else {
-            false
+            println!("Error : total supply incorrect");
+            println!("Current : {} SRKS", to_srks(total_u64));
+            println!("Expected : {} SRKS", to_srks(expected_total));
+            Ok(false)
         }
     }
 
+    // Get balance
+    pub async fn get_balance(pool: &PgPool, address: &str) -> Result<u64, Error> {
+        let balance = sqlx::query_scalar!(
+            "SELECT balance FROM wallet_balances WHERE address = $1",
+            address
+        )
+        .fetch_optional(pool)
+        .await?
+        .unwrap_or(0);
+
+        Ok(balance as u64)
+    }
+
     // View balances
-    pub fn view_balances(ledger: &LedgerMap) {
+    pub async fn view_balances(pool: &PgPool) -> Result<(), sqlx::Error> {
         println!("\n--- Wallet balances ---");
-        for (adresse, solde) in ledger.iter() {
+
+        let rows =
+            sqlx::query!("SELECT address, balance FROM wallet_balances ORDER BY balance DESC")
+                .fetch_all(pool)
+                .await?;
+
+        for row in rows {
             println!(
                 "{} : {} SRKS",
-                adresse,
-                Utils::trim_trailing_zeros(blockchain::to_srks(*solde))
+                row.address,
+                Utils::trim_trailing_zeros(blockchain::to_srks(row.balance as u64))
             );
         }
+
+        Ok(())
     }
 }

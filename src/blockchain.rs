@@ -2,16 +2,13 @@
 use serde::{Deserialize, Serialize};
 use serde_json;
 use sha2::{Digest, Sha256};
-use sqlx::PgPool;
-use std::collections::HashMap;
-use std::fs::{File, OpenOptions};
-use std::io::{BufReader, BufWriter};
+use sqlx::{PgPool, Postgres, Transaction as QuerySync};
 use uuid::Uuid;
 
 // Crates
 use crate::Utils;
 use crate::encryption::*;
-use crate::ledger;
+use crate::ledger::*;
 use crate::wallet::*;
 
 // Structures
@@ -30,9 +27,6 @@ const PERCENT_BASE: u64 = 100_000;
 const FEE_RATE: u64 = 1_000;
 const FEE_MAX: u64 = 100 * NANOSRKS_PER_SRKS;
 pub const PREFIX_ADDRESS: &str = "SRKS_";
-
-// Types
-pub type Blockchain = Vec<Block>;
 
 // Blocks
 // ------
@@ -71,6 +65,40 @@ impl Block {
         hasher.update(data);
         format!("{:x}", hasher.finalize())
     }
+
+    pub async fn get_last_block_meta(pool: &PgPool) -> Result<(u64, String), sqlx::Error> {
+        let row = sqlx::query!("SELECT index, hash FROM blocks ORDER BY index DESC LIMIT 1")
+            .fetch_optional(pool)
+            .await?;
+
+        if let Some(r) = row {
+            Ok((r.index as u64, r.hash))
+        } else {
+            Ok((0, "0".to_string()))
+        }
+    }
+
+    // Save to DB
+    pub async fn save_to_db(
+        block: &Block,
+        query_sync: &mut QuerySync<'_, Postgres>,
+    ) -> Result<(), sqlx::Error> {
+        let block_json = serde_json::to_value(&block).unwrap();
+
+        sqlx::query!(
+            "INSERT INTO blocks (index, timestamp, previous_hash, hash, raw_json)
+         VALUES ($1, $2, $3, $4, $5)",
+            block.index as i64,
+            block.timestamp as i64,
+            block.previous_hash,
+            block.hash,
+            block_json
+        )
+        .execute(&mut **query_sync)
+        .await?;
+
+        Ok(())
+    }
 }
 
 // Transaction
@@ -95,7 +123,6 @@ pub struct Transaction {
 impl Transaction {
     // Create a transaction
     pub async fn create(
-        ledger: &HashMap<String, u64>,
         sender: &str,
         recipient: &str,
         amount: u64,
@@ -197,12 +224,18 @@ impl Transaction {
 
         // Sold out
         if sender != format!("{}{}", PREFIX_ADDRESS, "genesis") {
-            let balance = ledger.get(sender).unwrap_or(&0);
-            if *balance < total {
+            let balance = match Ledger::get_balance(pg_pool, sender).await {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("Error getting balance for {}: {}", sender, e);
+                    return None;
+                }
+            };
+            if balance < total {
                 println!(
                     "Error : not enough tokens. current number of tokens {} : {}, required : {}",
                     sender,
-                    super::to_srks(*balance),
+                    super::to_srks(balance),
                     super::to_srks(total)
                 );
                 return None;
@@ -227,16 +260,58 @@ impl Transaction {
         })
     }
 
+    // Save transaction to database
+    pub async fn save_to_db(
+        tx: &Transaction,
+        block_index: u64,
+        query_sync: &mut QuerySync<'_, Postgres>,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            "INSERT INTO transactions (
+            id, block_index,
+            sender, recipient, amount, fee,
+            fee_founder, fee_treasury, fee_staking, fee_referral,
+            timestamp, signature, referrer,
+            sender_dh_public, recipient_dh_public, memo
+        ) VALUES (
+            $1, $2,
+            $3, $4, $5, $6,
+            $7, $8, $9, $10,
+            $11, $12, $13,
+            $14, $15, $16
+        )",
+            tx.id,
+            block_index as i64,
+            tx.sender,
+            tx.recipient,
+            tx.amount as i64,
+            tx.fee as i64,
+            tx.fee_rule.founder_percentage as i32,
+            tx.fee_rule.treasury_percentage as i32,
+            tx.fee_rule.staking_percentage as i32,
+            tx.fee_rule.referral_percentage as i32,
+            tx.timestamp as i64,
+            tx.signature,
+            tx.referrer,
+            tx.sender_dh_public,
+            tx.recipient_dh_public,
+            tx.memo
+        )
+        .execute(&mut **query_sync)
+        .await?;
+
+        Ok(())
+    }
+
     // Fees distribution
-    pub fn distribute_fee(
-        ledger: &mut HashMap<String, u64>,
+    pub fn fee_distributions(
         fee: u64,
         fee_rule: FeeRule,
         referrer_wallet: String,
-    ) {
+    ) -> Vec<(String, u64)> {
         // Stop if no fee
         if fee == 0 {
-            return;
+            return vec![];
         }
 
         // Distribution
@@ -250,22 +325,24 @@ impl Transaction {
         let shares = Self::split_fee_exact(fee, &percentages);
 
         // Get wallets
-        let public_sale_address =
-            Utils::read_from_file(&format!("owners\\{}", "PUBLIC_SALE")).unwrap();
-        let founder_address = Utils::read_from_file(&format!("owners\\{}", "FOUNDER")).unwrap();
-        let staking_address = Utils::read_from_file(&format!("owners\\{}", "STAKING")).unwrap();
+        let public_sale_address = Utils::read_from_file("owners/PUBLIC_SALE").unwrap();
+        let founder_address = Utils::read_from_file("owners/FOUNDER").unwrap();
+        let staking_address = Utils::read_from_file("owners/STAKING").unwrap();
 
-        // Update ledger
-        *ledger.entry(founder_address.clone()).or_insert(0) += shares[0];
-        *ledger.entry(public_sale_address).or_insert(0) += shares[1];
-        *ledger.entry(staking_address).or_insert(0) += shares[2];
+        let mut result = vec![
+            (founder_address.clone(), shares[0]),
+            (public_sale_address, shares[1]),
+            (staking_address, shares[2]),
+        ];
 
         // Check referrer
         if !referrer_wallet.is_empty() {
-            *ledger.entry(referrer_wallet.to_string()).or_insert(0) += shares[3];
+            result.push((referrer_wallet, shares[3]));
         } else {
-            *ledger.entry(founder_address).or_insert(0) += shares[3];
+            result.push((founder_address, shares[3]));
         }
+
+        result
     }
 
     // Adjusting imprecision
@@ -308,54 +385,27 @@ impl Transaction {
     }
 }
 
-// Save blockchain
-pub fn save(blockchain: &Vec<Block>) {
-    let file = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open("blockchain.json")
-        .expect("Error : unable to open output file");
+pub async fn is_empty(pool: &PgPool) -> Result<bool, sqlx::Error> {
+    let count = sqlx::query_scalar!("SELECT COUNT(*) FROM blocks")
+        .fetch_one(pool)
+        .await?;
 
-    let writer = BufWriter::new(file);
-    serde_json::to_writer_pretty(writer, &blockchain).expect("Error : serializing blockchain");
-    println!("Blockchain saved in '{}'", "blockchain.json");
+    Ok(count.unwrap_or(0) == 0)
 }
 
-// Load blockchain
-pub fn load() -> Vec<Block> {
-    let file = File::open("blockchain.json");
+// Load blockchain form db
+pub async fn load_blocks_from_db(pg_pool: &PgPool) -> Result<Vec<Block>, sqlx::Error> {
+    let rows = sqlx::query!("SELECT raw_json FROM blocks ORDER BY index ASC")
+        .fetch_all(pg_pool)
+        .await?;
 
-    match file {
-        Ok(f) => {
-            let reader = BufReader::new(f);
-            let blockchain: Vec<Block> = serde_json::from_reader(reader).unwrap_or_else(|_| {
-                println!("Error : corrupt or empty file");
-                std::process::exit(1);
-            });
-            println!("Blockchain loaded from '{}'", "blockchain.json");
-            blockchain
-        }
-        Err(_) => {
-            println!("Error : no existing files found, creating a new blockchain");
-            vec![]
-        }
+    let mut blocks = Vec::new();
+    for row in rows {
+        let block: Block = serde_json::from_value(row.raw_json).unwrap();
+        blocks.push(block);
     }
-}
 
-// Check integrity
-pub fn check_total_supply(ledger: &ledger::LedgerMap, expected_total: u64) -> bool {
-    let total: u64 = ledger.values().sum();
-
-    if total == expected_total {
-        println!("Total supply is correct : {}", to_srks(total));
-        true
-    } else {
-        println!("Error : total supply incorrect");
-        println!("Current : {} SRKS", to_srks(total));
-        println!("Expected : {} SRKS", to_srks(expected_total));
-        false
-    }
+    Ok(blocks)
 }
 
 // SRKS to nanosrks
@@ -366,13 +416,4 @@ pub fn to_nanosrks(srks: f64) -> u64 {
 // Nanosrks to SRKS
 pub fn to_srks(nanosrks: u64) -> f64 {
     nanosrks as f64 / NANOSRKS_PER_SRKS as f64
-}
-
-// Get the latest HASH
-pub fn get_latest_hash(blockchain: &Vec<Block>) -> String {
-    if let Some(last_block) = blockchain.last() {
-        last_block.hash.clone()
-    } else {
-        String::from("0")
-    }
 }
