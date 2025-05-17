@@ -1,3 +1,16 @@
+//!
+//!  $$$$$$\  $$\                           $$\ $$\
+//! $$  __$$\ $$ |                          \__|$$ |
+//! $$ /  \__|$$$$$$$\   $$$$$$\   $$$$$$\  $$\ $$ |  $$\  $$$$$$$\
+//! \$$$$$$\  $$  __$$\  \____$$\ $$  __$$\ $$ |$$ | $$  |$$  _____|
+//!  \____$$\ $$ |  $$ | $$$$$$$ |$$ |  \__|$$ |$$$$$$  / \$$$$$$\
+//! $$\   $$ |$$ |  $$ |$$  __$$ |$$ |      $$ |$$  _$$<   \____$$\
+//! \$$$$$$  |$$ |  $$ |\$$$$$$$ |$$ |      $$ |$$ | \$$\ $$$$$$$  |
+//! \______/ \__|  \__| \_______|\__|      \__|\__|  \__|\_______/
+//!
+//! The crypto you share… that shares back
+//! Copyright © : 2025
+
 // Molduls
 mod blockchain;
 mod encryption;
@@ -69,20 +82,17 @@ async fn main() -> Result<(), sqlx::Error> {
                 let private_key = Utils::prompt_secret("Private key :");
 
                 // Memo
-                let recipient_dh_public_str =
-                    Encryption::get_dh_public_key_hex_by_address(&pg_pool, &recipient).await?;
-                let recipient_dh_public =
-                    match Encryption::get_dh_public_key_by_address(&pg_pool, &recipient).await {
-                        Ok(Some(dh_pubkey)) => dh_pubkey,
-                        Ok(None) => {
-                            eprintln!("Erreur : destinataire introuvable ou pas de dh_public.");
-                            return Ok(());
-                        }
-                        Err(e) => {
-                            eprintln!("Erreur SQL : {}", e);
-                            return Err(e);
-                        }
-                    };
+                let (recipient_dh_public_str, recipient_dh_public_opt) =
+                    Encryption::get_dh_public_key_data_by_address(&pg_pool, &recipient).await?;
+
+                let recipient_dh_public = match recipient_dh_public_opt {
+                    Some(key) => key,
+                    None => {
+                        eprintln!("Erreur : destinataire introuvable ou pas de dh_public.");
+                        return Ok(());
+                    }
+                };
+
                 let sender_dh_secret = match Encryption::hex_to_static_secret(&sender_dh_secret_str)
                 {
                     Some(secret) => secret,
@@ -147,7 +157,16 @@ async fn main() -> Result<(), sqlx::Error> {
                 let found = Wallet::exists(&pg_pool, &referrer).await.unwrap_or(false);
 
                 if found || referrer.is_empty() {
-                    Wallet::new(found, "", &referrer.trim(), &passphrase, &pg_pool).await;
+                    Wallet::new(
+                        found,
+                        "",
+                        &referrer.trim(),
+                        &passphrase,
+                        false,
+                        true,
+                        &pg_pool,
+                    )
+                    .await;
                 } else {
                     println!("Error : the sponsor {} is not a known wallet", referrer);
                 }
@@ -196,7 +215,6 @@ async fn main() -> Result<(), sqlx::Error> {
                 println!("Bye !");
                 break;
             }
-
             _ => println!("Error : invalid choise"),
         }
     }

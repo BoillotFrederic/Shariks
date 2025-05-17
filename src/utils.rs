@@ -1,3 +1,9 @@
+//! # Utils Module - Shariks Chain
+//!
+//! The `utils` module provides helper functions and shared utilities used across
+//! the Shariks blockchain codebase. These functions are lightweight, reusable,
+//! and aim to reduce duplication in core logic.
+
 // Dependencies
 use rpassword::read_password;
 use std::fs::File;
@@ -6,19 +12,20 @@ use std::io::{self, Read, Write};
 //use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-// Structures
+// Utils
+// -----
+
 pub struct Utils;
 
-// Utils class
 impl Utils {
-    // Clean decimals
+    /// Cleaning up trailing zeros
     pub fn trim_trailing_zeros(value: f64) -> String {
         let s = format!("{:.10}", value);
         let trimmed = s.trim_end_matches('0').trim_end_matches('.');
         trimmed.to_string()
     }
 
-    // Simple prompt
+    /// Simple prompt
     pub fn prompt(text: &str) -> String {
         println!("{}", text);
         let mut _prompt = String::new();
@@ -28,13 +35,13 @@ impl Utils {
         _prompt.trim().to_string()
     }
 
-    // Secret prompt
+    /// Secret prompt
     pub fn prompt_secret(text: &str) -> String {
         println!("{}", text);
         read_password().unwrap_or_else(|_| "".to_string())
     }
 
-    // Current date
+    /// Current date in timestamp
     pub fn current_timestamp() -> u128 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -62,7 +69,7 @@ impl Utils {
     //     Ok(number)
     // }
 
-    // Write file text
+    /// Write file with a text
     pub fn write_to_file(filename: &str, content: &str) -> io::Result<()> {
         let mut file = OpenOptions::new()
             .create(true)
@@ -74,7 +81,7 @@ impl Utils {
         Ok(())
     }
 
-    // Read file text
+    /// Read all text in file
     pub fn read_from_file(filename: &str) -> io::Result<String> {
         let mut file = File::open(filename)?;
         let mut content = String::new();

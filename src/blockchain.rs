@@ -1,3 +1,9 @@
+//! # Blockchain Module - Shariks Chain
+//!
+//! This module defines the core data structures and logic that represent
+//! the Shariks blockchain itself. It maintains the chain of blocks,
+//! enforces transaction validation rules, and handles block addition.
+
 // Dependencies
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -11,7 +17,7 @@ use crate::encryption::*;
 use crate::ledger::*;
 use crate::wallet::*;
 
-// Structures
+/// Defines the format of a fee rule
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeeRule {
     pub founder_percentage: u64,
@@ -28,9 +34,10 @@ const FEE_RATE: u64 = 1_000;
 const FEE_MAX: u64 = 100 * NANOSRKS_PER_SRKS;
 pub const PREFIX_ADDRESS: &str = "SRKS_";
 
-// Blocks
-// ------
+// Block
+// -----
 
+/// Defines the format of a block
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Block {
     pub index: u64,
@@ -41,7 +48,7 @@ pub struct Block {
 }
 
 impl Block {
-    // New block
+    /// Create a new block
     pub fn new(index: u64, transactions: Vec<Transaction>, previous_hash: String) -> Self {
         let timestamp = Utils::current_timestamp();
         let mut block = Block {
@@ -55,7 +62,7 @@ impl Block {
         block
     }
 
-    // HASH
+    /// Calculate the hash
     pub fn calculate_hash(&self) -> String {
         let data = format!(
             "{}{}{:?}{}",
@@ -66,6 +73,7 @@ impl Block {
         format!("{:x}", hasher.finalize())
     }
 
+    /// Finds the index and hash of the last added block
     pub async fn get_last_block_meta(pool: &PgPool) -> Result<(u64, String), sqlx::Error> {
         let row = sqlx::query!("SELECT index, hash FROM blocks ORDER BY index DESC LIMIT 1")
             .fetch_optional(pool)
@@ -78,7 +86,7 @@ impl Block {
         }
     }
 
-    // Save to DB
+    /// Saves the block in the database if the entire transaction was successful
     pub async fn save_to_db(
         block: &Block,
         query_sync: &mut QuerySync<'_, Postgres>,
@@ -104,6 +112,7 @@ impl Block {
 // Transaction
 // -----------
 
+/// Defines the format of a transaction
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Transaction {
     pub id: Uuid,
@@ -260,7 +269,7 @@ impl Transaction {
         })
     }
 
-    // Save transaction to database
+    /// Saves the transaction(s) in the database if the entire transaction was successful
     pub async fn save_to_db(
         tx: &Transaction,
         block_index: u64,
@@ -303,7 +312,7 @@ impl Transaction {
         Ok(())
     }
 
-    // Fees distribution
+    /// Distribution of transaction fees
     pub fn fee_distributions(
         fee: u64,
         fee_rule: FeeRule,
@@ -345,7 +354,7 @@ impl Transaction {
         result
     }
 
-    // Adjusting imprecision
+    /// Fee adjustment so that no tokens or nano tokens are lost
     pub fn split_fee_exact(fee: u64, percentages: &[u64]) -> Vec<u64> {
         let mut shares: Vec<u64> = percentages.iter().map(|p| fee * p / PERCENT_BASE).collect();
         let total_allocated: u64 = shares.iter().sum();
@@ -358,7 +367,7 @@ impl Transaction {
         shares
     }
 
-    // Decrypt memo
+    /// Decrypt a transaction memo with the correct DH secret and DH public keys
     pub fn decrypt_memo(memo: &str, dh_secret: &str, dh_public: &str) -> String {
         if let Some((memo_b64, nonce_b64)) = memo.split_once(':') {
             if let (Some(secret), Some(pubkey), Some(nonce)) = (
@@ -385,15 +394,32 @@ impl Transaction {
     }
 }
 
+/// Checking that the blockchain does not already exist
 pub async fn is_empty(pool: &PgPool) -> Result<bool, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+
+    // Check if block exists
     let count = sqlx::query_scalar!("SELECT COUNT(*) FROM blocks")
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
 
-    Ok(count.unwrap_or(0) == 0)
+    // Check genesis status
+    let genesis_done: bool =
+        sqlx::query_scalar!("SELECT genesis_done FROM system_status WHERE id = 1")
+            .fetch_one(&mut *tx)
+            .await?;
+
+    // Lock to avoid concurrent init
+    sqlx::query!("LOCK TABLE blocks IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+
+    Ok(count.map_or(false, |n| n == 0) && !genesis_done)
 }
 
-// Load blockchain form db
+/// Load all blocks in json from the database
 pub async fn load_blocks_from_db(pg_pool: &PgPool) -> Result<Vec<Block>, sqlx::Error> {
     let rows = sqlx::query!("SELECT raw_json FROM blocks ORDER BY index ASC")
         .fetch_all(pg_pool)
@@ -408,12 +434,12 @@ pub async fn load_blocks_from_db(pg_pool: &PgPool) -> Result<Vec<Block>, sqlx::E
     Ok(blocks)
 }
 
-// SRKS to nanosrks
+/// Convert SRKS units to nanosrks
 pub fn to_nanosrks(srks: f64) -> u64 {
     (srks * NANOSRKS_PER_SRKS as f64).round() as u64
 }
 
-// Nanosrks to SRKS
+/// Convert nanosrks to SRKS units
 pub fn to_srks(nanosrks: u64) -> f64 {
     nanosrks as f64 / NANOSRKS_PER_SRKS as f64
 }

@@ -1,3 +1,26 @@
+//! # Genesis Module - Shariks Chain
+//!
+//! This module initializes the Shariks blockchain with a predefined state at genesis.
+//! It sets up the initial distribution of tokens and system wallets that form
+//! the foundation of the network.
+//!
+//! ## Key Features:
+//!
+//! - **Token Supply Initialization**
+//!   - Defines a fixed total supply of **100 million SRKS** tokens.
+//!
+//! - **Genesis Allocation**
+//!   - **80%** to the `PUBLIC_SALE` wallet (for public distribution).
+//!   - **10%** to the `SPONSORSHIP` wallet (reserve in case of malfunction).
+//!   - **10%** to the `TREASURY` wallet (reserve in case of malfunction).
+//!
+//! - **System Wallets Created at Genesis**
+//!   - `FOUNDER` - Infrastructure and development.
+//!   - `TREASURY` - Reserve in case of malfunction.
+//!   - `STAKING` - Redistributes them monthly to holders.
+//!   - `SPONSORSHIP` - Reserve in case of malfunction.
+//!   - `PUBLIC_SALE` - Intended for public sale.
+
 // Dependencies
 use sqlx::PgPool;
 use std::env;
@@ -12,14 +35,13 @@ use crate::ledger::*;
 use crate::vault::*;
 use crate::wallet::*;
 
-// Structures
-pub struct Genesis;
-
 // Genesis
 // -------
 
+pub struct Genesis;
+
 impl Genesis {
-    // Start genesis
+    /// Beginning of Genesis
     pub async fn start(pg_pool: &PgPool) -> Result<(), Box<dyn std::error::Error>> {
         // Public sale
         let genesis_passphrase = env::var("GENESIS_PASSPHRASE")?;
@@ -28,6 +50,8 @@ impl Genesis {
             &"PUBLIC_SALE".to_string(),
             "",
             &genesis_passphrase,
+            true,
+            false,
             &pg_pool,
         )
         .await;
@@ -68,29 +92,38 @@ impl Genesis {
         // Transaction of distribution initial
         Self::distribute(&pg_pool).await?;
 
+        // Genesis done
+        sqlx::query!(
+            "UPDATE system_status SET genesis_done = TRUE, last_updated = now() WHERE id = 1"
+        )
+        .execute(pg_pool)
+        .await?;
+
         Ok(())
     }
 
-    // Distribute tokens
+    /// Initial distribution of tokens
     async fn distribute(pg_pool: &PgPool) -> Result<(), Box<dyn std::error::Error>> {
         // Public sale
         let public_sale_secret = VaultService::get_owner_secret(&"PUBLIC_SALE".to_string()).await?;
         let public_sale_address = Wallet::add_prefix(&public_sale_secret.public_key);
-
-        if let Err(e) = Wallet::add_exempt_fee(&pg_pool, &public_sale_address).await {
-            eprintln!("Error : add exempt_fees_address : {}", e);
-        }
 
         // Wallets to be created
         let wallet_names = vec!["FOUNDER", "SPONSORSHIP", "TREASURY", "STAKING"];
         let genesis_passphrase = env::var("GENESIS_PASSPHRASE")?;
         let mut wallet_addresses: Vec<String> = Vec::new();
         for wallet_name in wallet_names.iter() {
-            let wallet = Wallet::new(false, wallet_name, "", &genesis_passphrase, &pg_pool).await;
+            let wallet = Wallet::new(
+                false,
+                wallet_name,
+                "",
+                &genesis_passphrase,
+                true,
+                false,
+                &pg_pool,
+            )
+            .await;
             wallet_addresses.push(wallet.address.clone());
-            if let Err(e) = Wallet::add_exempt_fee(&pg_pool, &wallet.address).await {
-                eprintln!("Error : add exempt_fees_address : {}", e);
-            }
         }
 
         let distribution = vec![

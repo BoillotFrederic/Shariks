@@ -1,3 +1,9 @@
+//! # Ledger Module - Shariks Chain
+//!
+//! The `ledger` module is responsible for managing wallet balances,
+//! verifying transaction eligibility, and applying balance updates
+//! as the chain evolves.
+
 // Dependencies
 use sqlx::{Error, PgPool, Postgres, Transaction as QuerySync};
 
@@ -10,8 +16,10 @@ use crate::blockchain::*;
 // ------
 
 pub struct Ledger;
+
 impl Ledger {
-    // Apply transaction
+    /// Apply the transaction by updating the ledger in the database but only if the entire
+    /// transaction was successful
     pub async fn apply_transaction(
         tx: &Transaction,
         query_sync: &mut QuerySync<'_, Postgres>,
@@ -72,7 +80,7 @@ impl Ledger {
         Ok(())
     }
 
-    // Check integrity
+    /// Checks if the distributed tokens match the total number of tokens
     pub async fn check_total_supply(
         pool: &PgPool,
         expected_total: u64,
@@ -94,7 +102,7 @@ impl Ledger {
         }
     }
 
-    // Get balance
+    /// Find the number of tokens held by a wallet
     pub async fn get_balance(pool: &PgPool, address: &str) -> Result<u64, Error> {
         let balance = sqlx::query_scalar!(
             "SELECT balance FROM wallet_balances WHERE address = $1",
@@ -107,7 +115,7 @@ impl Ledger {
         Ok(balance as u64)
     }
 
-    // View balances
+    /// List all wallets and their tokens
     pub async fn view_balances(pool: &PgPool) -> Result<(), sqlx::Error> {
         println!("\n--- Wallet balances ---");
 

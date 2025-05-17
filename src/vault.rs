@@ -1,3 +1,8 @@
+//! # Vault Module - Shariks Chain
+//!
+//! The `vault` module is responsible for managing and securing system-level wallet keys
+//! and sensitive data such as the private keys of genesis or operational wallets.
+
 // Dependencies
 use serde::{Deserialize, Serialize};
 use std::env;
@@ -6,7 +11,7 @@ use vaultrs::auth::approle;
 use vaultrs::client::{VaultClient, VaultClientSettingsBuilder};
 use vaultrs::kv2;
 
-// Structures
+/// Defines the format of a WalletSecret
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct WalletSecret {
     pub mnemonic: String,
@@ -21,8 +26,9 @@ pub struct WalletSecret {
 // -------------
 
 pub struct VaultService;
+
 impl VaultService {
-    // Auth
+    /// Authentication with AppRole and Vault
     async fn login_with_approle() -> Result<VaultClient, Box<dyn std::error::Error>> {
         let addr = env::var("VAULT_ADDR")?;
         let role_id = env::var("VAULT_ROLE_ID")?;
@@ -47,7 +53,7 @@ impl VaultService {
         Ok(authed_client)
     }
 
-    // Set owner
+    /// Write a secret owner wallet
     pub async fn set_owner_secret(
         wallet_name: &str,
         wallet: WalletSecret,
@@ -59,7 +65,7 @@ impl VaultService {
         Ok(())
     }
 
-    // Get owner
+    /// Read a secret owner wallet
     pub async fn get_owner_secret(wallet_name: &str) -> Result<WalletSecret, Box<dyn Error>> {
         // Read secret
         let client = Self::login_with_approle().await?;

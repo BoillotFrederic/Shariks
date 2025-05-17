@@ -1,3 +1,8 @@
+//! # Encryption Module - Shariks Chain
+//!
+//! The `encryption` module handles all cryptographic operations necessary for
+//! secure transactions, wallet authentication, and chain integrity within the Shariks blockchain.
+
 // Dependencies
 use base64::{Engine, engine::general_purpose};
 use bip39::Mnemonic;
@@ -16,8 +21,9 @@ use x25519_dalek::{PublicKey as XPublicKey, StaticSecret};
 // ----------
 
 pub struct Encryption;
+
 impl Encryption {
-    // Encrypt message
+    /// Encrypt a message with the DH secret and DH public keys
     pub fn encrypt_message(
         sender_secret: &StaticSecret,
         recipient_public: &XPublicKey,
@@ -40,7 +46,7 @@ impl Encryption {
         }
     }
 
-    // Decrypt message
+    /// Decrypt a message with the correct DH secret and DH public keys
     pub fn decrypt_message(
         dh_secret: StaticSecret,
         dh_public: &XPublicKey,
@@ -58,7 +64,8 @@ impl Encryption {
         String::from_utf8(decrypted).ok()
     }
 
-    // Generate key pair from mnemonic
+    /// Generates a mnemonic and a public key associated with a private key, encapsulates
+    /// in the encryption a secret DH key and a public DH key
     pub fn generate_full_keypair_from_mnemonic(
         passphrase: &str,
     ) -> (String, SigningKey, VerifyingKey, StaticSecret, XPublicKey) {
@@ -79,7 +86,8 @@ impl Encryption {
         (phrase, signing_key, verifying_key, dh_secret, dh_public)
     }
 
-    // Restore key pair from mnemonic
+    /// Remove the public key, private key, DU secret key and public DH key using the mnemonic
+    /// and the seed
     pub fn restore_full_keypair_from_mnemonic(
         phrase: &str,
         passphrase: &str,
@@ -100,7 +108,7 @@ impl Encryption {
         Ok((signing_key, verifying_key, dh_secret, dh_public))
     }
 
-    // Sign transaction
+    /// Sign a transaction with a private key and other parameters
     pub fn sign_transaction(
         private_key: String,
         sender: String,
@@ -126,7 +134,7 @@ impl Encryption {
         hex::encode(signature.to_bytes())
     }
 
-    // Verify signature
+    /// Verify the transaction signature using the public key
     pub fn verify_transaction(public_key_hex: &str, message: &str, signature_hex: &str) -> bool {
         // Erros
         let public_key_bytes = match hex::decode(public_key_hex) {
@@ -155,38 +163,17 @@ impl Encryption {
         verifying_key.verify(message.as_bytes(), &signature).is_ok()
     }
 
-    // Get dh public (hex) from data base
-    pub async fn get_dh_public_key_hex_by_address(
+    /// Find the public DH in hex and XPublicKey
+    pub async fn get_dh_public_key_data_by_address(
         pool: &PgPool,
         address: &str,
-    ) -> Result<String, sqlx::Error> {
+    ) -> Result<(String, Option<XPublicKey>), sqlx::Error> {
         let result = sqlx::query!(
             r#"
-            SELECT dh_public
-            FROM wallets
-            WHERE address = $1
-            "#,
-            address
-        )
-        .fetch_optional(pool)
-        .await?;
-
-        Ok(result
-            .and_then(|row| row.dh_public)
-            .unwrap_or_else(|| "".to_string()))
-    }
-
-    // Get dh public (XPublicKey) from data base
-    pub async fn get_dh_public_key_by_address(
-        pool: &PgPool,
-        address: &str,
-    ) -> Result<Option<XPublicKey>, sqlx::Error> {
-        let result = sqlx::query!(
-            r#"
-            SELECT dh_public
-            FROM wallets
-            WHERE address = $1
-            "#,
+        SELECT dh_public
+        FROM wallets
+        WHERE address = $1
+        "#,
             address
         )
         .fetch_optional(pool)
@@ -194,37 +181,35 @@ impl Encryption {
 
         if let Some(row) = result {
             if let Some(dh_hex) = row.dh_public {
-                match hex::decode(&dh_hex) {
-                    Ok(bytes) if bytes.len() == 32 => {
-                        let mut arr = [0u8; 32];
-                        arr.copy_from_slice(&bytes);
-                        Ok(Some(XPublicKey::from(arr)))
-                    }
-                    _ => Ok(None),
-                }
+                // XPublicKey decode
+                let dh_key = Self::hex_to_xpubkey(&dh_hex);
+
+                Ok((dh_hex, dh_key))
             } else {
-                Ok(None)
+                // Null field
+                Ok(("".to_string(), None))
             }
         } else {
-            Ok(None)
+            // Nothing found
+            Ok(("".to_string(), None))
         }
     }
 
-    // String to static secret
+    /// String to StaticSecrets
     pub fn hex_to_static_secret(hex: &str) -> Option<StaticSecret> {
         let bytes = hex::decode(hex).ok()?;
         let arr: [u8; 32] = bytes.try_into().ok()?;
         Some(StaticSecret::from(arr))
     }
 
-    // String to XPublicKey
+    /// String to XPublicKey
     pub fn hex_to_xpubkey(hex: &str) -> Option<XPublicKey> {
         let bytes = hex::decode(hex).ok()?;
         let arr: [u8; 32] = bytes.try_into().ok()?;
         Some(XPublicKey::from(arr))
     }
 
-    // String to nonce
+    /// String to nonce
     pub fn b64_to_nonce(b64: &str) -> Option<[u8; 24]> {
         let bytes = general_purpose::STANDARD.decode(b64).ok()?;
         bytes.try_into().ok()

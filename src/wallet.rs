@@ -1,3 +1,8 @@
+//! # Wallet Module - Shariks Chain
+//!
+//! The `wallet` module defines the structure, creation, and verification
+//! logic for wallets in the Shariks blockchain.
+
 // Dependencies
 use hex;
 use serde::{Deserialize, Serialize};
@@ -10,6 +15,7 @@ use crate::utils::*;
 use crate::vault;
 use crate::vault::*;
 
+/// Defines the format of a wallet owner
 #[derive(Serialize, Deserialize, Debug)]
 pub struct WalletOwner {
     pub public_key: String,
@@ -22,6 +28,7 @@ pub const WALLET_GENESIS: &str = "SRKS_genesis";
 // Wallet
 // ------
 
+/// Defines the format of a wallet
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Wallet {
     pub address: String,
@@ -30,12 +37,14 @@ pub struct Wallet {
 }
 
 impl Wallet {
-    // Create a new wallet
+    /// Create a new wallet
     pub async fn new(
         referrer_found: bool,
         owner_wallet_name: &str,
         referrer: &str,
         passphrase: &str,
+        exempt_fee: bool,
+        staking_available: bool,
         pg_pool: &PgPool,
     ) -> Wallet {
         // Keypair generate
@@ -56,10 +65,10 @@ impl Wallet {
         let is_first_referrer = if referrer_found {
             let updated = sqlx::query!(
                 r#"
-                UPDATE referrer_counter
-                SET counter = counter + 1
-                WHERE referrer = $1
-                RETURNING counter
+                UPDATE wallets
+                SET referrer_count = referrer_count + 1
+                WHERE address = $1
+                RETURNING referrer_count
                 "#,
                 referrer
             )
@@ -67,9 +76,9 @@ impl Wallet {
             .await;
 
             match updated {
-                Ok(row) => row.counter <= 100,
+                Ok(row) => row.referrer_count <= 100,
                 Err(e) => {
-                    eprintln!("Error : update referrer_counter: {}", e);
+                    eprintln!("Error : update referrer_count: {}", e);
                     false
                 }
             }
@@ -108,13 +117,15 @@ impl Wallet {
         // Insert the wallet
         if let Err(e) = sqlx::query!(
             r#"
-            INSERT INTO wallets (address, dh_public, referrer, first_referrer)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO wallets (address, dh_public, referrer, first_referrer, exempt_fee, staking_available)
+            VALUES ($1, $2, $3, $4, $5, $6)
             "#,
             wallet.address,
             dh_public,
             wallet.referrer,
-            wallet.first_referrer
+            wallet.first_referrer,
+            exempt_fee,
+            staking_available
         )
         .execute(pg_pool)
         .await
@@ -122,26 +133,11 @@ impl Wallet {
             eprintln!("Error : insert wallet : {}", e);
         }
 
-        // Insert the referrer counter
-        if let Err(e) = sqlx::query!(
-            r#"
-            INSERT INTO referrer_counter (referrer, counter)
-            VALUES ($1, $2)
-            "#,
-            wallet.address,
-            0_i32
-        )
-        .execute(pg_pool)
-        .await
-        {
-            eprintln!("Error : insert referrer counter : {}", e);
-        };
-
         // Return the wallet
         wallet
     }
 
-    // Find a wallet
+    /// Find a wallet
     pub async fn find(pool: &PgPool, address: &str) -> Result<Wallet, Error> {
         let result = sqlx::query_as!(
             Wallet,
@@ -162,7 +158,7 @@ impl Wallet {
         }))
     }
 
-    // Checking if wallet exists
+    /// Checking if wallet exists
     pub async fn exists(pool: &PgPool, address: &str) -> Result<bool, Error> {
         let exists = sqlx::query_scalar!(
             r#"
@@ -178,33 +174,17 @@ impl Wallet {
         Ok(exists.unwrap_or(false))
     }
 
-    // Check wallet
+    /// Check if the address starts with the correct prefix
     pub fn check_prefix(address: &str) -> bool {
         address.starts_with(blockchain::PREFIX_ADDRESS)
     }
 
-    // Add exempt fees address
-    pub async fn add_exempt_fee(pg_pool: &PgPool, address: &str) -> Result<(), Error> {
-        sqlx::query!(
-            r#"
-            INSERT INTO exempt_fees_addresses (address)
-            VALUES ($1)
-            ON CONFLICT DO NOTHING
-            "#,
-            address
-        )
-        .execute(pg_pool)
-        .await?;
-
-        Ok(())
-    }
-
-    // Checking if an address is exempt from fees
+    /// Checking if an address is exempt from fees
     pub async fn is_exempt_fee(pg_pool: &PgPool, address: &str) -> Result<bool, Error> {
         let exists = sqlx::query_scalar!(
             r#"
             SELECT EXISTS (
-                SELECT 1 FROM exempt_fees_addresses WHERE address = $1
+                SELECT 1 FROM wallets WHERE address = $1 and exempt_fee = true
             )
             "#,
             address
@@ -215,12 +195,12 @@ impl Wallet {
         Ok(exists.unwrap_or(false))
     }
 
-    // Add prefix
+    /// Adds the prefix to a public key
     pub fn add_prefix(public_key: &str) -> String {
         return format!("{}{}", blockchain::PREFIX_ADDRESS, public_key);
     }
 
-    // Print all wallets
+    /// Print all created wallets
     pub async fn print_all(pool: &PgPool) -> Result<(), Error> {
         let wallets = sqlx::query_as!(
             Wallet,
