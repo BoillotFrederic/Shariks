@@ -16,6 +16,7 @@ mod blockchain;
 mod encryption;
 mod genesis;
 mod ledger;
+mod staking;
 mod utils;
 mod vault;
 mod wallet;
@@ -23,13 +24,15 @@ mod wallet;
 // Dependencies
 use base64::Engine;
 use blockchain::*;
+use chrono::{TimeZone, Utc};
 use encryption::*;
 use genesis::*;
 use ledger::*;
 use sqlx::PgPool;
+use staking::*;
 use std::io;
 use utils::*;
-//use vault::*;
+use vault::*;
 use wallet::*;
 
 // Main
@@ -63,7 +66,11 @@ async fn main() -> Result<(), sqlx::Error> {
         println!("6. View keypair with mnemonic");
         println!("7. Wallets list");
         println!("8. Decrypt memo");
-        println!("9. Quit");
+        println!("9. Create a snapshot of ledger");
+        println!("10. Create a snapshot of blocks between two dates");
+        println!("11. Test write secret vault");
+        println!("12. Read secret vault");
+        println!("13. Quit");
 
         let mut choice = String::new();
 
@@ -218,6 +225,57 @@ async fn main() -> Result<(), sqlx::Error> {
                 println!("{}", memo_decrypted);
             }
             "9" => {
+                let pg_pool_clone = pg_pool.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = Staking::save_ledger_snapshot(&pg_pool_clone).await {
+                        eprintln!("Erreur snapshot : {}", e);
+                    }
+                });
+            }
+            "10" => {
+                let pg_pool_clone = pg_pool.clone();
+                let from = Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap();
+                let to = Utc.with_ymd_and_hms(2025, 1, 31, 23, 59, 59).unwrap();
+
+                tokio::spawn(async move {
+                    if let Err(e) =
+                        Staking::export_blocks_between_dates(&pg_pool_clone, &from, &to).await
+                    {
+                        eprintln!("Erreur snapshot : {}", e);
+                    }
+                });
+            }
+            "11" => {
+                let wallet_secret = vault::WalletSecret {
+                    mnemonic: "mnemonic test".to_string(),
+                    passphrase: "passphrase test".to_string(),
+                    public_key: "public_key test".to_string(),
+                    private_key: "private_key test".to_string(),
+                    dh_public: "dh_public test".to_string(),
+                    dh_secret: "dh_secret test".to_string(),
+                };
+                match VaultService::set_owner_secret("Test", wallet_secret).await {
+                    Ok(()) => {
+                        println!("OK");
+                    }
+                    Err(e) => println!("{}", e),
+                };
+            }
+            "12" => {
+                let name = Utils::prompt("Name : ");
+                match VaultService::get_owner_secret(&name).await {
+                    Ok(secret) => {
+                        println!("{}", secret.mnemonic);
+                        println!("{}", secret.passphrase);
+                        println!("{}", secret.public_key);
+                        println!("{}", secret.private_key);
+                        println!("{}", secret.dh_public);
+                        println!("{}", secret.dh_secret);
+                    }
+                    Err(e) => println!("{}", e),
+                };
+            }
+            "13" => {
                 println!("Bye !");
                 break;
             }

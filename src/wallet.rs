@@ -96,7 +96,7 @@ impl Wallet {
                 passphrase: passphrase.to_string(),
                 public_key: public_key_hex.clone(),
                 private_key: private_key_hex.clone(),
-                dh_public: hex::encode(dh_public.as_bytes()),
+                dh_public: dh_public.clone(),
                 dh_secret: hex::encode(dh_secret.to_bytes()),
             };
 

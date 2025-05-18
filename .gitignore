@@ -35,7 +35,10 @@ exempt_fees_addresses.json
 .env
 
 # Vault storage
-vault-data/
+/vault-data/
 init_vault.ps1
 shariks_policy.hcl
 vault.hcl
+
+# Snapshot
+/snapshots/
