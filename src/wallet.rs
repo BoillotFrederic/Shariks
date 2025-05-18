@@ -4,6 +4,7 @@
 //! logic for wallets in the Shariks blockchain.
 
 // Dependencies
+use chrono::{DateTime, Duration, Utc};
 use hex;
 use serde::{Deserialize, Serialize};
 use sqlx::{Error, PgPool};
@@ -34,6 +35,8 @@ pub struct Wallet {
     pub address: String,
     pub referrer: Option<String>,
     pub first_referrer: bool,
+    pub staking_available: bool,
+    pub last_login: DateTime<Utc>,
 }
 
 impl Wallet {
@@ -112,6 +115,8 @@ impl Wallet {
             address: address.clone(),
             referrer: (!referrer.is_empty()).then(|| referrer.to_string()),
             first_referrer: is_first_referrer,
+            staking_available: true,
+            last_login: Utc::now(),
         };
 
         // Insert the wallet
@@ -142,7 +147,12 @@ impl Wallet {
         let result = sqlx::query_as!(
             Wallet,
             r#"
-            SELECT address, referrer, first_referrer
+            SELECT
+                address,
+                referrer,
+                first_referrer,
+                staking_available,
+                last_login as "last_login: DateTime<chrono::Utc>"
             FROM wallets
             WHERE address = $1
             "#,
@@ -155,6 +165,8 @@ impl Wallet {
             address: "".to_string(),
             referrer: None,
             first_referrer: false,
+            staking_available: true,
+            last_login: Utc::now(),
         }))
     }
 
@@ -173,6 +185,29 @@ impl Wallet {
 
         Ok(exists.unwrap_or(false))
     }
+
+    /// Check if a wallet has been inactive for 1 year
+    pub fn is_inactive(wallet: Wallet) -> bool {
+        let limit = Utc::now() - Duration::days(365);
+        let last_login = wallet.last_login;
+        last_login < limit
+    }
+
+    // /// Updates the last wallet connection
+    // pub async fn update_last_login(pool: &PgPool, address: &str) -> Result<(), sqlx::Error> {
+    //     sqlx::query!(
+    //         r#"
+    //     UPDATE wallets
+    //     SET last_login = now()
+    //     WHERE address = $1
+    //     "#,
+    //         address
+    //     )
+    //     .execute(pool)
+    //     .await?;
+    //
+    //     Ok(())
+    // }
 
     /// Check if the address starts with the correct prefix
     pub fn check_prefix(address: &str) -> bool {
@@ -205,7 +240,8 @@ impl Wallet {
         let wallets = sqlx::query_as!(
             Wallet,
             r#"
-            SELECT address, referrer, first_referrer
+            SELECT address, referrer, first_referrer, staking_available,
+            last_login as "last_login: DateTime<chrono::Utc>"
             FROM wallets
             "#
         )

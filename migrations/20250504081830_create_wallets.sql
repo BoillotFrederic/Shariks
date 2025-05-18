@@ -6,5 +6,5 @@ CREATE TABLE IF NOT EXISTS wallets (
     referrer_count INTEGER NOT NULL DEFAULT 0,
     exempt_fee BOOLEAN NOT NULL DEFAULT FALSE,
     staking_available BOOLEAN NOT NULL DEFAULT TRUE,
-    last_login TIMESTAMP WITH TIME ZONE DEFAULT now()
+    last_login TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
 );

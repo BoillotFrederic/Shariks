@@ -196,6 +196,7 @@ impl Transaction {
                 .await
                 .unwrap();
 
+        let inactive_referrer = Wallet::is_inactive(sender_referrer_wallet.clone());
         let bonus_referrer =
             if !sender_referrer_wallet.address.is_empty() && sender_wallet.first_referrer {
                 true
@@ -205,14 +206,18 @@ impl Transaction {
 
         // Set fees
         let fee_rule = FeeRule {
-            founder_percentage: if bonus_referrer {
+            founder_percentage: if inactive_referrer {
+                60_000_u64
+            } else if bonus_referrer {
                 30_000_u64
             } else {
                 40_000_u64
             },
             treasury_percentage: 30_000_u64,
             staking_percentage: 10_000_u64,
-            referral_percentage: if bonus_referrer {
+            referral_percentage: if inactive_referrer {
+                0_u64
+            } else if bonus_referrer {
                 30_000_u64
             } else {
                 20_000_u64

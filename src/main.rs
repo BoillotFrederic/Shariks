@@ -187,7 +187,13 @@ async fn main() -> Result<(), sqlx::Error> {
             "6" => {
                 let mnemonic = Utils::prompt("Mnemonic :");
                 let passphrase = Utils::prompt_secret("Passphrase :");
-                match Encryption::restore_full_keypair_from_mnemonic(&mnemonic, &passphrase) {
+                match Encryption::restore_full_keypair_from_mnemonic(
+                    &mnemonic,
+                    &passphrase,
+                    &pg_pool,
+                )
+                .await
+                {
                     Ok((signing_key, verifying_key, dh_secret, dh_public)) => {
                         println!("Public key : {}", hex::encode(verifying_key.to_bytes()));
                         println!("Private key : {}", hex::encode(signing_key.to_bytes()));

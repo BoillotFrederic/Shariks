@@ -17,6 +17,9 @@ use sqlx::PgPool;
 use std::convert::TryInto;
 use x25519_dalek::{PublicKey as XPublicKey, StaticSecret};
 
+// Crates
+use crate::Wallet;
+
 // Encryption
 // ----------
 
@@ -88,9 +91,10 @@ impl Encryption {
 
     /// Remove the public key, private key, DU secret key and public DH key using the mnemonic
     /// and the seed
-    pub fn restore_full_keypair_from_mnemonic(
+    pub async fn restore_full_keypair_from_mnemonic(
         phrase: &str,
         passphrase: &str,
+        pool: &PgPool,
     ) -> Result<(SigningKey, VerifyingKey, StaticSecret, XPublicKey), String> {
         let mnemonic = Mnemonic::parse(phrase).expect("Error : invalid mnemonic phrase");
         let seed = mnemonic.to_seed(passphrase);
@@ -104,6 +108,15 @@ impl Encryption {
         let seed_dh: [u8; 32] = seed[32..64].try_into().expect("Error : seed < 64 bytes");
         let dh_secret = StaticSecret::from(seed_dh);
         let dh_public = XPublicKey::from(&dh_secret);
+
+        let address = hex::encode(verifying_key.to_bytes());
+        let exists = Wallet::exists(pool, &Wallet::add_prefix(&address))
+            .await
+            .map_err(|e| format!("Error while checking wallet existence: {}", e))?;
+
+        if !exists {
+            return Err("Error: wallet does not exist".to_string());
+        }
 
         Ok((signing_key, verifying_key, dh_secret, dh_public))
     }
