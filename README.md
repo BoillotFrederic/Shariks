@@ -1,4 +1,4 @@
-# Shariks Chain — Whitepaper (en developpement)
+# Shariks Chain - Whitepaper (en developpement)
 
 ## Introduction
 Shariks est un réseau blockchain de nouvelle génération conçu pour être léger, économe en ressources, et centré sur l’engagement communautaire grâce à un mécanisme hybride alliant PoR (Proof of Relay) et PoS (Proof of Stake).
@@ -15,7 +15,7 @@ Créer une crypto qui ne dépend pas de la puissance de calcul ou d'infrastructu
 - Illimité dans le temps : tant que le filleul est actif, le parrain continue de recevoir des récompenses.
 - **Bonus Parrainage** : les 100 premiers filleuls d’un utilisateur lui rapportent 10% de récompense en plus à vie.
 
-### Proof of Stake (PoS) — Staking automatique
+### Proof of Stake (PoS) - Staking automatique
 - Toute adresse détenant des jetons reçoit des "dividendes" mensuels issus des frais de transactions.
 - Pas de génération magique de tokens : les récompenses proviennent exclusivement des **frais collectés**.
 - Un système comptable tient compte du **temps exact de détention**, malgré les mouvements, pour assurer une distribution équitable (type "livret A").
