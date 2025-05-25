@@ -68,7 +68,7 @@ impl Wallet {
         let is_first_referrer = if referrer_found {
             let updated = sqlx::query!(
                 r#"
-                UPDATE wallets
+                UPDATE core.wallets
                 SET referrer_count = referrer_count + 1
                 WHERE address = $1
                 RETURNING referrer_count
@@ -122,7 +122,7 @@ impl Wallet {
         // Insert the wallet
         if let Err(e) = sqlx::query!(
             r#"
-            INSERT INTO wallets (address, dh_public, referrer, first_referrer, exempt_fee, staking_available)
+            INSERT INTO core.wallets (address, dh_public, referrer, first_referrer, exempt_fee, staking_available)
             VALUES ($1, $2, $3, $4, $5, $6)
             "#,
             wallet.address,
@@ -153,7 +153,7 @@ impl Wallet {
                 first_referrer,
                 staking_available,
                 last_login as "last_login: DateTime<chrono::Utc>"
-            FROM wallets
+            FROM core.wallets
             WHERE address = $1
             "#,
             address
@@ -175,7 +175,7 @@ impl Wallet {
         let exists = sqlx::query_scalar!(
             r#"
             SELECT EXISTS (
-                SELECT 1 FROM wallets WHERE address = $1
+                SELECT 1 FROM core.wallets WHERE address = $1
             )
             "#,
             address
@@ -219,7 +219,7 @@ impl Wallet {
         let exists = sqlx::query_scalar!(
             r#"
             SELECT EXISTS (
-                SELECT 1 FROM wallets WHERE address = $1 and exempt_fee = true
+                SELECT 1 FROM core.wallets WHERE address = $1 and exempt_fee = true
             )
             "#,
             address
@@ -242,7 +242,7 @@ impl Wallet {
             r#"
             SELECT address, referrer, first_referrer, staking_available,
             last_login as "last_login: DateTime<chrono::Utc>"
-            FROM wallets
+            FROM core.wallets
             "#
         )
         .fetch_all(pool)

@@ -184,7 +184,7 @@ impl Encryption {
         let result = sqlx::query!(
             r#"
         SELECT dh_public
-        FROM wallets
+        FROM core.wallets
         WHERE address = $1
         "#,
             address

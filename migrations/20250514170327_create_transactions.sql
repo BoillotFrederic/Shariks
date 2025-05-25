@@ -1,6 +1,6 @@
-CREATE TABLE transactions (
+CREATE TABLE core.transactions (
     id UUID PRIMARY KEY,
-    block_index BIGINT NOT NULL REFERENCES blocks(index),
+    block_index BIGINT NOT NULL REFERENCES core.blocks(index),
     sender TEXT NOT NULL,
     recipient TEXT NOT NULL,
     amount BIGINT NOT NULL,

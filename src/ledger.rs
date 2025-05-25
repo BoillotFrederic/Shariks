@@ -30,7 +30,7 @@ impl Ledger {
         // Sender amount
         if tx.sender != genesis {
             let sender_balance: i64 = sqlx::query_scalar!(
-                "SELECT balance FROM wallet_balances WHERE address = $1",
+                "SELECT balance FROM core.wallet_balances WHERE address = $1",
                 tx.sender
             )
             .fetch_one(&mut **query_sync)
@@ -41,7 +41,7 @@ impl Ledger {
             }
 
             sqlx::query!(
-                "UPDATE wallet_balances SET balance = balance - $1 WHERE address = $2",
+                "UPDATE core.wallet_balances SET balance = balance - $1 WHERE address = $2",
                 total as i64,
                 tx.sender
             )
@@ -51,7 +51,7 @@ impl Ledger {
 
         // Payment
         sqlx::query!(
-            "INSERT INTO wallet_balances (address, balance)
+            "INSERT INTO core.wallet_balances (address, balance)
          VALUES ($1, $2)
          ON CONFLICT (address) DO UPDATE SET balance = wallet_balances.balance + $2",
             tx.recipient,
@@ -67,9 +67,9 @@ impl Ledger {
             tx.referrer.clone(),
         ) {
             sqlx::query!(
-                "INSERT INTO wallet_balances (address, balance)
+                "INSERT INTO core.wallet_balances (address, balance)
              VALUES ($1, $2)
-             ON CONFLICT (address) DO UPDATE SET balance = wallet_balances.balance + $2",
+             ON CONFLICT (address) DO UPDATE SET balance = core.wallet_balances.balance + $2",
                 addr,
                 amount as i64
             )
@@ -85,7 +85,7 @@ impl Ledger {
         pool: &PgPool,
         expected_total: u64,
     ) -> Result<bool, sqlx::Error> {
-        let row = sqlx::query!("SELECT SUM(balance)::BIGINT AS total FROM wallet_balances")
+        let row = sqlx::query!("SELECT SUM(balance)::BIGINT AS total FROM core.wallet_balances")
             .fetch_one(pool)
             .await?;
 
@@ -105,7 +105,7 @@ impl Ledger {
     /// Find the number of tokens held by a wallet
     pub async fn get_balance(pool: &PgPool, address: &str) -> Result<u64, Error> {
         let balance = sqlx::query_scalar!(
-            "SELECT balance FROM wallet_balances WHERE address = $1",
+            "SELECT balance FROM core.wallet_balances WHERE address = $1",
             address
         )
         .fetch_optional(pool)
@@ -120,7 +120,7 @@ impl Ledger {
         println!("\n--- Wallet balances ---");
 
         let rows =
-            sqlx::query!("SELECT address, balance FROM wallet_balances ORDER BY balance DESC")
+            sqlx::query!("SELECT address, balance FROM core.wallet_balances ORDER BY balance DESC")
                 .fetch_all(pool)
                 .await?;
 

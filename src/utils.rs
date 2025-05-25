@@ -49,6 +49,18 @@ impl Utils {
             .as_millis()
     }
 
+    /*
+    // let rows = with_timeout(sqlx::query("...").fetch_all(&pool), 10).await?;
+    async fn with_timeout<T>(
+        fut: impl std::future::Future<Output = T>,
+        secs: u64,
+    ) -> Result<T, &'static str> {
+        tokio::time::timeout(Duration::from_secs(secs), fut)
+            .await
+            .map_err(|_| "Timeout")
+    }
+    */
+
     // // Increment a file
     // pub fn increment_file<P: AsRef<Path>>(file_path: P) -> io::Result<u64> {
     //     let mut file = OpenOptions::new()

@@ -24,7 +24,7 @@ mod wallet;
 // Dependencies
 use base64::Engine;
 use blockchain::*;
-use chrono::{TimeZone, Utc};
+//use chrono::{TimeZone, Utc};
 use encryption::*;
 use genesis::*;
 use ledger::*;
@@ -224,7 +224,7 @@ async fn main() -> Result<(), sqlx::Error> {
                     blockchain::Transaction::decrypt_memo(&memo, &dh_secret, &dh_public);
                 println!("{}", memo_decrypted);
             }
-            "9" => {
+            /*"9" => {
                 let pg_pool_clone = pg_pool.clone();
                 tokio::spawn(async move {
                     if let Err(e) = Staking::save_ledger_snapshot(&pg_pool_clone).await {
@@ -242,6 +242,21 @@ async fn main() -> Result<(), sqlx::Error> {
                         Staking::export_blocks_between_dates(&pg_pool_clone, &from, &to).await
                     {
                         eprintln!("Erreur snapshot : {}", e);
+                    }
+                });
+            }*/
+            "10" => {
+                let pg_pool_clone = pg_pool.clone();
+                tokio::spawn(async move {
+                    let staking_key = VaultService::get_owner_secret("STAKING").await.unwrap();
+                    if let Err(e) = Staking::execute_monthly_staking_distribution(
+                        &pg_pool_clone,
+                        "SRKS_STAKING",
+                        &staking_key.private_key,
+                    )
+                    .await
+                    {
+                        eprintln!("Erreur staking monthly : {}", e);
                     }
                 });
             }

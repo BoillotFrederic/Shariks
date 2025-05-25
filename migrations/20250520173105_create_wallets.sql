@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS wallets (
+CREATE TABLE IF NOT EXISTS core.wallets (
     address TEXT PRIMARY KEY,
     referrer TEXT,
     dh_public TEXT,

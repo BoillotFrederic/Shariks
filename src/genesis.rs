@@ -94,7 +94,7 @@ impl Genesis {
 
         // Genesis done
         sqlx::query!(
-            "UPDATE system_status SET genesis_done = TRUE, last_updated = now() WHERE id = 1"
+            "UPDATE core.system_status SET genesis_done = TRUE, last_updated = now() WHERE id = 1"
         )
         .execute(pg_pool)
         .await?;

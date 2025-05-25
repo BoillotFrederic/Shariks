@@ -5,6 +5,7 @@
 //! enforces transaction validation rules, and handles block addition.
 
 // Dependencies
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json;
 use sha2::{Digest, Sha256};
@@ -75,7 +76,7 @@ impl Block {
 
     /// Finds the index and hash of the last added block
     pub async fn get_last_block_meta(pool: &PgPool) -> Result<(u64, String), sqlx::Error> {
-        let row = sqlx::query!("SELECT index, hash FROM blocks ORDER BY index DESC LIMIT 1")
+        let row = sqlx::query!("SELECT index, hash FROM core.blocks ORDER BY index DESC LIMIT 1")
             .fetch_optional(pool)
             .await?;
 
@@ -94,7 +95,7 @@ impl Block {
         let block_json = serde_json::to_value(&block).unwrap();
 
         sqlx::query!(
-            "INSERT INTO blocks (index, timestamp, previous_hash, hash, raw_json)
+            "INSERT INTO core.blocks (index, timestamp, previous_hash, hash, raw_json)
          VALUES ($1, $2, $3, $4, $5)",
             block.index as i64,
             block.timestamp as i64,
@@ -281,7 +282,7 @@ impl Transaction {
         query_sync: &mut QuerySync<'_, Postgres>,
     ) -> Result<(), sqlx::Error> {
         sqlx::query!(
-            "INSERT INTO transactions (
+            "INSERT INTO core.transactions (
             id, block_index,
             sender, recipient, amount, fee,
             fee_founder, fee_treasury, fee_staking, fee_referral,
@@ -404,18 +405,18 @@ pub async fn is_empty(pool: &PgPool) -> Result<bool, sqlx::Error> {
     let mut tx = pool.begin().await?;
 
     // Check if block exists
-    let count = sqlx::query_scalar!("SELECT COUNT(*) FROM blocks")
+    let count = sqlx::query_scalar!("SELECT COUNT(*) FROM core.blocks")
         .fetch_one(&mut *tx)
         .await?;
 
     // Check genesis status
     let genesis_done: bool =
-        sqlx::query_scalar!("SELECT genesis_done FROM system_status WHERE id = 1")
+        sqlx::query_scalar!("SELECT genesis_done FROM core.system_status WHERE id = 1")
             .fetch_one(&mut *tx)
             .await?;
 
     // Lock to avoid concurrent init
-    sqlx::query!("LOCK TABLE blocks IN ACCESS EXCLUSIVE MODE")
+    sqlx::query!("LOCK TABLE core.blocks IN ACCESS EXCLUSIVE MODE")
         .execute(&mut *tx)
         .await?;
 
@@ -426,7 +427,7 @@ pub async fn is_empty(pool: &PgPool) -> Result<bool, sqlx::Error> {
 
 /// Load all blocks in json from the database
 pub async fn load_blocks_from_db(pg_pool: &PgPool) -> Result<Vec<Block>, sqlx::Error> {
-    let rows = sqlx::query!("SELECT raw_json FROM blocks ORDER BY index ASC")
+    let rows = sqlx::query!("SELECT raw_json FROM core.blocks ORDER BY index ASC")
         .fetch_all(pg_pool)
         .await?;
 
@@ -438,6 +439,113 @@ pub async fn load_blocks_from_db(pg_pool: &PgPool) -> Result<Vec<Block>, sqlx::E
 
     Ok(blocks)
 }
+
+/*pub async fn verify_and_resync_ledger(pg_pool: &PgPool) -> Result<(), Box<dyn std::error::Error>> {
+    println!("Relecture complète de la blockchain (mode SQL stream)...");
+
+    // Étape 1 : Créer une table temporaire pour reconstruire les soldes
+    sqlx::query(
+        r#"
+        CREATE TEMP TABLE tmp_ledger_sync (
+            address TEXT PRIMARY KEY,
+            balance BIGINT NOT NULL DEFAULT 0
+        ) ON COMMIT DROP;
+        "#,
+    )
+    .execute(pg_pool)
+    .await?;
+
+    // Étape 2 : Stream des blocs
+    let mut block_stream = sqlx::query!(
+        r#"
+        SELECT index
+        FROM core.blocks
+        ORDER BY index ASC
+        "#
+    )
+    .fetch(pg_pool);
+
+    while let Some(row) = block_stream.next().await {
+        let block = row?;
+        let tx_stream = sqlx::query!(
+            r#"
+            SELECT sender, recipient, amount
+            FROM core.transactions
+            WHERE block_index = $1
+            "#,
+            block.index
+        )
+        .fetch(pg_pool);
+
+        tokio::pin!(tx_stream); // pour rendre la stream utilisable plusieurs fois
+
+        while let Some(tx_row) = tx_stream.next().await {
+            let tx = tx_row?;
+            let amount = tx.amount.max(0) as i64;
+
+            // Déduire du sender (sauf SRKS_GENESIS)
+            if tx.sender != "SRKS_GENESIS" {
+                sqlx::query(
+                    r#"
+                    INSERT INTO tmp_ledger_sync (address, balance)
+                    VALUES ($1, -$2)
+                    ON CONFLICT (address)
+                    DO UPDATE SET balance = tmp_ledger_sync.balance - $2
+                    "#,
+                )
+                .bind(&tx.sender)
+                .bind(amount)
+                .execute(pg_pool)
+                .await?;
+            }
+
+            // Ajouter au recipient
+            sqlx::query(
+                r#"
+                INSERT INTO tmp_ledger_sync (address, balance)
+                VALUES ($1, $2)
+                ON CONFLICT (address)
+                DO UPDATE SET balance = tmp_ledger_sync.balance + $2
+                "#,
+            )
+            .bind(&tx.recipient)
+            .bind(amount)
+            .execute(pg_pool)
+            .await?;
+        }
+    }
+
+    // Étape 3 : Vérification des soldes
+    let mut desync_count = 0;
+
+    let mut real_ledger = sqlx::query!(
+        r#"
+        SELECT wl.address, wl.balance, COALESCE(tmp.balance, 0) AS expected
+        FROM core.wallet_balances wl
+        LEFT JOIN tmp_ledger_sync tmp ON wl.address = tmp.address
+        "#
+    )
+    .fetch(pg_pool);
+
+    while let Some(row) = real_ledger.next().await {
+        let r = row?;
+        if r.balance != r.expected {
+            println!(
+                "Désynchronisation : {} → réel = {}, attendu = {}",
+                r.address, r.balance, r.expected
+            );
+            desync_count += 1;
+        }
+    }
+
+    if desync_count == 0 {
+        println!("Ledger parfaitement synchronisé !");
+    } else {
+        println!("{} désynchronisations détectées.", desync_count);
+    }
+
+    Ok(())
+}*/
 
 /// Convert SRKS units to nanosrks
 pub fn to_nanosrks(srks: f64) -> u64 {

@@ -1,4 +1,4 @@
-CREATE TABLE blocks (
+CREATE TABLE core.blocks (
     index BIGINT PRIMARY KEY,
     timestamp BIGINT NOT NULL,
     previous_hash TEXT NOT NULL,
