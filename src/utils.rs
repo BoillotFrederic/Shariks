@@ -9,7 +9,7 @@ use rpassword::read_password;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::{self, Read, Write};
-//use std::path::Path;
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // Utils
@@ -61,25 +61,26 @@ impl Utils {
     }
     */
 
-    // // Increment a file
-    // pub fn increment_file<P: AsRef<Path>>(file_path: P) -> io::Result<u64> {
-    //     let mut file = OpenOptions::new()
-    //         .read(true)
-    //         .write(true)
-    //         .create(true)
-    //         .open(file_path)?;
-    //
-    //     let mut content = String::new();
-    //     file.read_to_string(&mut content)?;
-    //
-    //     let mut number = content.trim().parse::<u64>().unwrap_or(0);
-    //     number += 1;
-    //
-    //     file.set_len(0)?;
-    //     file.write_all(number.to_string().as_bytes())?;
-    //
-    //     Ok(number)
-    // }
+    // Increment a file
+    #[allow(unused)]
+    pub fn increment_file<P: AsRef<Path>>(file_path: P) -> io::Result<u64> {
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(file_path)?;
+
+        let mut content = String::new();
+        file.read_to_string(&mut content)?;
+
+        let mut number = content.trim().parse::<u64>().unwrap_or(0);
+        number += 1;
+
+        file.set_len(0)?;
+        file.write_all(number.to_string().as_bytes())?;
+
+        Ok(number)
+    }
 
     /// Write file with a text
     pub fn write_to_file(filename: &str, content: &str) -> io::Result<()> {

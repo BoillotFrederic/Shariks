@@ -1,3 +1,33 @@
+//! # Staking Module – Shariks Chain
+//!
+//! The `staking` module manages the monthly distribution of staking rewards
+//! to eligible wallet holders, based on their average token holdings and activity.
+//!
+//! It operates without Proof of Work, relying instead on a hybrid Proof of Stake
+//! and Proof of Relay system. This module is tightly integrated with the ledger
+//! and database for efficient and verifiable reward calculation.
+//!
+//! - **Holder Scoring System**
+//!   - Uses a time-weighted score per wallet based on:
+//!     - Daily token balances (snapshot-based).
+//!     - Activity status (`last_login` within 12 months).
+//!     - Eligibility flag (`staking_available = TRUE`).
+//!     - A hard cap at **1% of total supply** per wallet to avoid dominance.
+//!
+//! - **Efficient SQL-Based Calculation**
+//!   - All calculations are streamed via PostgreSQL to minimize RAM usage.
+//!   - Results are written to a dedicated `staking_scores` table with `completed` flags for tracking.
+//!
+//! - **Grouped Transaction Injection**
+//!   - Reward transactions are batched (e.g. 1000 per block) for performance and scalability.
+//!
+//! - **Automatic Cleanup & Resync**
+//!   - Old snapshots are purged monthly.
+//!   - Ledger synchronization is verified before each distribution to ensure chain integrity.
+//!
+//! This module implements a fair and scalable reward system aligned with Shariks' vision:
+//! energy-efficient, community-driven, and referral-enhanced staking.
+
 // Dependencies
 use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
 use futures::StreamExt;
@@ -10,6 +40,9 @@ use crate::encryption::*;
 use crate::ledger::*;
 use crate::vault::*;
 use crate::wallet::*;
+
+// Types
+type DynError = Box<dyn std::error::Error>;
 
 /// Defines the format of a Transaction for export
 #[derive(Debug, Serialize, Deserialize)]
@@ -29,7 +62,6 @@ struct ExportedTransaction {
 }
 
 // Globals
-#[allow(unused)]
 const STAKING_CAP: u64 = 1_000_000 * NANOSRKS_PER_SRKS;
 
 // Staking
@@ -37,14 +69,13 @@ const STAKING_CAP: u64 = 1_000_000 * NANOSRKS_PER_SRKS;
 
 pub struct Staking;
 
-#[allow(unused)]
 impl Staking {
     /// Calulate all wallet scores
     pub async fn calculate_scores(
         pg_pool: &PgPool,
         from: NaiveDate,
         to: NaiveDate,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), DynError> {
         // Start date
         let mut current_day = from;
 
@@ -55,9 +86,12 @@ impl Staking {
             let snapshot_table = format!("snapshot.wallet_balances_snapshot_day_{}", date_str);
             let sql = &format!(
                 r#"
-                SELECT address, balance
-                FROM {}
-                WHERE balance > 0
+                SELECT s.address, s.balance
+                FROM {} s
+                INNER JOIN core.wallets w ON s.address = w.address
+                WHERE s.balance > 0
+                AND w.staking_available = TRUE
+                AND w.last_login >= now() - INTERVAL '1 year'
                 "#,
                 snapshot_table
             );
@@ -82,7 +116,7 @@ impl Staking {
                     score as i64
                 )
                 .execute(pg_pool)
-                .await;
+                .await?;
             }
 
             current_day += Duration::days(1);
@@ -97,7 +131,7 @@ impl Staking {
         pg_pool: &PgPool,
         staking_wallet: &str,
         staking_private_key: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), DynError> {
         // Get total score
         let total_score: i64 = sqlx::query_scalar!(
             r#"
@@ -184,7 +218,7 @@ impl Staking {
         pg_pool: &PgPool,
         transactions: &[Transaction],
         addresses: &[String],
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), DynError> {
         let (last_index, last_hash) = Block::get_last_block_meta(pg_pool).await?;
         let block = Block::new(last_index + 1, transactions.to_vec(), last_hash);
         let mut tx: QuerySync<'_, sqlx::Postgres> = pg_pool.begin().await?;
@@ -226,11 +260,7 @@ impl Staking {
     }
 
     /// Start disritution of staking token for the last month
-    pub async fn execute_monthly_staking_distribution(
-        pg_pool: &PgPool,
-        staking_wallet: &str,
-        staking_private_key: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn execute_monthly_staking_distribution(pg_pool: &PgPool) -> Result<(), DynError> {
         // Last month
         let now = Utc::now().naive_utc().date();
         let (year, month) = if now.month() == 1 {
@@ -250,18 +280,16 @@ impl Staking {
         let staking_secret = VaultService::get_owner_secret(&"STAKING".to_string()).await?;
         let staking_address = Wallet::add_prefix(&staking_secret.public_key);
         let staking_private_key = staking_secret.private_key;
-        Self::execute_monthly_staking_distribution(pg_pool, staking_wallet, &staking_private_key);
+        Self::generate_distribution(pg_pool, &staking_address, &staking_private_key).await?;
 
         // Clear
-        Self::purge_staking_scores_for_month(pg_pool);
+        Self::purge_staking_scores_for_month(pg_pool).await?;
 
         Ok(())
     }
 
     /// Clear the staking month tables
-    pub async fn purge_staking_scores_for_month(
-        pg_pool: &PgPool,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn purge_staking_scores_for_month(pg_pool: &PgPool) -> Result<(), DynError> {
         // Drop snapshot day tables
         for day in 1..=31 {
             let table_name = format!("snapshot.wallet_balances_snapshot_day_{:02}", day);
@@ -280,7 +308,8 @@ impl Staking {
     }
 
     /// Take a snapshot of wallet balances
-    pub async fn snapshot_day(pg_pool: &PgPool) -> Result<(), Box<dyn std::error::Error>> {
+    #[allow(unused)]
+    pub async fn snapshot_day(pg_pool: &PgPool) -> Result<(), DynError> {
         // Day to string
         let yesterday = Utc::now() - Duration::days(1);
         let day = yesterday.day();
@@ -301,10 +330,8 @@ impl Staking {
     }
 
     // Delete a snapshot
-    pub async fn delete_snapshot(
-        pg_pool: &PgPool,
-        table_name: i32,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    #[allow(unused)]
+    pub async fn delete_snapshot(pg_pool: &PgPool, table_name: i32) -> Result<(), DynError> {
         let sql = format!("DROP TABLE IF EXISTS {};", table_name);
         sqlx::query(&sql).execute(pg_pool).await?;
 
@@ -314,10 +341,14 @@ impl Staking {
 
     /// Return a number days in month
     fn num_days_in_month(year: i32, month: u32) -> u32 {
+        fn is_leap_year(year: i32) -> bool {
+            (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+        }
+
         match month {
             1 => 31,
             2 => {
-                if Self::is_leap_year(year) {
+                if is_leap_year(year) {
                     29
                 } else {
                     28
@@ -335,10 +366,5 @@ impl Staking {
             12 => 31,
             _ => 30,
         }
-    }
-
-    /// Return if year is leap
-    fn is_leap_year(year: i32) -> bool {
-        (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
     }
 }

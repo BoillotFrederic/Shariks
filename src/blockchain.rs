@@ -5,6 +5,7 @@
 //! enforces transaction validation rules, and handles block addition.
 
 // Dependencies
+#[allow(unused)]
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json;

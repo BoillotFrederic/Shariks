@@ -1,15 +1,15 @@
-//!
-//!  $$$$$$\  $$\                           $$\ $$\
-//! $$  __$$\ $$ |                          \__|$$ |
-//! $$ /  \__|$$$$$$$\   $$$$$$\   $$$$$$\  $$\ $$ |  $$\  $$$$$$$\
-//! \$$$$$$\  $$  __$$\  \____$$\ $$  __$$\ $$ |$$ | $$  |$$  _____|
-//!  \____$$\ $$ |  $$ | $$$$$$$ |$$ |  \__|$$ |$$$$$$  / \$$$$$$\
-//! $$\   $$ |$$ |  $$ |$$  __$$ |$$ |      $$ |$$  _$$<   \____$$\
-//! \$$$$$$  |$$ |  $$ |\$$$$$$$ |$$ |      $$ |$$ | \$$\ $$$$$$$  |
-//!  \______/ \__|  \__| \_______|\__|      \__|\__|  \__|\_______/
-//!
-//! The crypto you share… that shares back
-//! Copyright © : 2025
+//
+//  $$$$$$\  $$\                           $$\ $$\
+// $$  __$$\ $$ |                          \__|$$ |
+// $$ /  \__|$$$$$$$\   $$$$$$\   $$$$$$\  $$\ $$ |  $$\  $$$$$$$\
+// \$$$$$$\  $$  __$$\  \____$$\ $$  __$$\ $$ |$$ | $$  |$$  _____|
+//  \____$$\ $$ |  $$ | $$$$$$$ |$$ |  \__|$$ |$$$$$$  / \$$$$$$\
+// $$\   $$ |$$ |  $$ |$$  __$$ |$$ |      $$ |$$  _$$<   \____$$\
+// \$$$$$$  |$$ |  $$ |\$$$$$$$ |$$ |      $$ |$$ | \$$\ $$$$$$$  |
+//  \______/ \__|  \__| \_______|\__|      \__|\__|  \__|\_______/
+//
+// The crypto you share… that shares back
+// Copyright © : 2025
 
 // Molduls
 mod blockchain;
@@ -24,7 +24,6 @@ mod wallet;
 // Dependencies
 use base64::Engine;
 use blockchain::*;
-//use chrono::{TimeZone, Utc};
 use encryption::*;
 use genesis::*;
 use ledger::*;
@@ -66,9 +65,9 @@ async fn main() -> Result<(), sqlx::Error> {
         println!("6. View keypair with mnemonic");
         println!("7. Wallets list");
         println!("8. Decrypt memo");
-        println!("9. Create a snapshot of ledger");
-        println!("10. Create a snapshot of blocks between two dates");
-        println!("11. Test write secret vault");
+        println!("9. Fake insert for token distribution test (coming soon)");
+        println!("10. Distribute staking wallet for the last month");
+        println!("11. Write secret wallet");
         println!("12. Read secret vault");
         println!("13. Quit");
 
@@ -78,6 +77,7 @@ async fn main() -> Result<(), sqlx::Error> {
             .read_line(&mut choice)
             .expect("Error : read line");
         match choice.trim() {
+            // CLI - add transaction
             "1" => {
                 let sender = Utils::prompt("Sender :");
                 let recipient = Utils::prompt("Recipient :");
@@ -158,6 +158,7 @@ async fn main() -> Result<(), sqlx::Error> {
                     println!("\nTransaction : {:?}", block);
                 }
             }
+            // CLI - create a new wallet
             "2" => {
                 let referrer = Utils::prompt("Godfather :");
                 let passphrase = Utils::prompt_secret("Passphrase :");
@@ -178,6 +179,7 @@ async fn main() -> Result<(), sqlx::Error> {
                     println!("Error : the sponsor {} is not a known wallet", referrer);
                 }
             }
+            // CLI - print all blocks
             "3" => {
                 let blocks = blockchain::load_blocks_from_db(&pg_pool).await?;
                 for block in &blocks {
@@ -185,12 +187,15 @@ async fn main() -> Result<(), sqlx::Error> {
                     println!("{:#?}", block);
                 }
             }
+            // CLI - view balances
             "4" => {
                 Ledger::view_balances(&pg_pool).await?;
             }
+            // CLI - check total supply
             "5" => {
                 Ledger::check_total_supply(&pg_pool, 100_000_000 * NANOSRKS_PER_SRKS).await?;
             }
+            // CLI - View keypair with mnemonic
             "6" => {
                 let mnemonic = Utils::prompt("Mnemonic :");
                 let passphrase = Utils::prompt_secret("Passphrase :");
@@ -210,11 +215,13 @@ async fn main() -> Result<(), sqlx::Error> {
                     Err(err) => eprintln!("Error : failed to restore keypair: {}", err),
                 }
             }
+            // CLI - print all wallets
             "7" => {
                 if let Err(e) = Wallet::print_all(&pg_pool).await {
                     eprintln!("Error : print wallets : {}", e);
                 }
             }
+            // CLI - Decrypt a memo
             "8" => {
                 let memo = Utils::prompt("Memo : ");
                 let dh_public = Utils::prompt("DH public : ");
@@ -224,42 +231,22 @@ async fn main() -> Result<(), sqlx::Error> {
                     blockchain::Transaction::decrypt_memo(&memo, &dh_secret, &dh_public);
                 println!("{}", memo_decrypted);
             }
-            /*"9" => {
-                let pg_pool_clone = pg_pool.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = Staking::save_ledger_snapshot(&pg_pool_clone).await {
-                        eprintln!("Erreur snapshot : {}", e);
-                    }
-                });
-            }
-            "10" => {
-                let pg_pool_clone = pg_pool.clone();
-                let from = Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap();
-                let to = Utc.with_ymd_and_hms(2025, 1, 31, 23, 59, 59).unwrap();
+            // CLI - fake insert for token distribution test (coming soon)
+            "9" => {}
 
-                tokio::spawn(async move {
-                    if let Err(e) =
-                        Staking::export_blocks_between_dates(&pg_pool_clone, &from, &to).await
-                    {
-                        eprintln!("Erreur snapshot : {}", e);
-                    }
-                });
-            }*/
+            // CLI - distribute staking wallet for the last month
             "10" => {
                 let pg_pool_clone = pg_pool.clone();
-                tokio::spawn(async move {
-                    let staking_key = VaultService::get_owner_secret("STAKING").await.unwrap();
-                    if let Err(e) = Staking::execute_monthly_staking_distribution(
+                tokio::task::spawn_blocking(move || {
+                    let rt = tokio::runtime::Runtime::new().unwrap();
+                    if let Err(e) = rt.block_on(Staking::execute_monthly_staking_distribution(
                         &pg_pool_clone,
-                        "SRKS_STAKING",
-                        &staking_key.private_key,
-                    )
-                    .await
-                    {
-                        eprintln!("Erreur staking monthly : {}", e);
+                    )) {
+                        eprintln!("Erreur staking : {}", e);
                     }
                 });
             }
+            // CLI - write a secret wallet
             "11" => {
                 let wallet_secret = vault::WalletSecret {
                     mnemonic: "mnemonic test".to_string(),
@@ -276,6 +263,7 @@ async fn main() -> Result<(), sqlx::Error> {
                     Err(e) => println!("{}", e),
                 };
             }
+            // CLI - read a secret wallet
             "12" => {
                 let name = Utils::prompt("Name : ");
                 match VaultService::get_owner_secret(&name).await {
@@ -290,10 +278,12 @@ async fn main() -> Result<(), sqlx::Error> {
                     Err(e) => println!("{}", e),
                 };
             }
+            // CLI - quit
             "13" => {
                 println!("Bye !");
                 break;
             }
+            // invalid choise
             _ => println!("Error : invalid choise"),
         }
     }
