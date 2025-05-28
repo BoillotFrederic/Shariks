@@ -81,23 +81,42 @@ impl Genesis {
         };
 
         let genesis_block = blockchain::Block::new(0, vec![genesis_tx.clone()], "0".to_string());
-
         let mut query_sync = pg_pool.begin().await?;
-        blockchain::Block::save_to_db(&genesis_block, &mut query_sync).await?;
-        blockchain::Transaction::save_to_db(&genesis_tx, genesis_block.index, &mut query_sync)
+
+        let result = {
+            blockchain::Block::save_to_db(&genesis_block, &mut query_sync).await?;
+            blockchain::Transaction::save_to_db(&genesis_tx, genesis_block.index, &mut query_sync)
+                .await?;
+            Ledger::apply_transaction(&genesis_tx, &mut query_sync).await?;
+
+            // Genesis done
+            Utils::with_timeout(
+                sqlx::query!(
+                    r#"
+                    UPDATE core.system_status
+                    SET genesis_done = TRUE, last_updated = now()
+                    WHERE id = 1
+                    "#
+                )
+                .execute(pg_pool),
+                30,
+            )
             .await?;
-        Ledger::apply_transaction(&genesis_tx, &mut query_sync).await?;
-        query_sync.commit().await?;
+            Ok::<(), Box<dyn std::error::Error>>(())
+        };
 
-        // Transaction of distribution initial
-        Self::distribute(&pg_pool).await?;
+        match result {
+            Ok(_) => {
+                query_sync.commit().await?;
 
-        // Genesis done
-        sqlx::query!(
-            "UPDATE core.system_status SET genesis_done = TRUE, last_updated = now() WHERE id = 1"
-        )
-        .execute(pg_pool)
-        .await?;
+                // Transaction of distribution initial
+                Self::distribute(&pg_pool).await?;
+            }
+            Err(e) => {
+                query_sync.rollback().await.ok();
+                return Err(e);
+            }
+        }
 
         Ok(())
     }
@@ -112,6 +131,7 @@ impl Genesis {
         let wallet_names = vec!["FOUNDER", "SPONSORSHIP", "TREASURY", "STAKING"];
         let genesis_passphrase = env::var("GENESIS_PASSPHRASE")?;
         let mut wallet_addresses: Vec<String> = Vec::new();
+
         for wallet_name in wallet_names.iter() {
             let wallet = Wallet::new(
                 false,
@@ -134,61 +154,73 @@ impl Genesis {
         let mut query_sync = pg_pool.begin().await?;
         let mut transactions = Vec::new();
 
-        for (recipient, amount) in distribution {
-            // Signature
-            let signature = Encryption::sign_transaction(
-                public_sale_secret.private_key.clone(),
-                public_sale_address.clone(),
-                recipient.clone(),
-                amount,
-                "Initial distribution".to_string(),
-            );
+        let result = {
+            for (recipient, amount) in distribution {
+                // Signature
+                let signature = Encryption::sign_transaction(
+                    public_sale_secret.private_key.clone(),
+                    public_sale_address.clone(),
+                    recipient.clone(),
+                    amount,
+                    "Initial distribution".to_string(),
+                );
 
-            // Transaction
-            if let Some(tx) = blockchain::Transaction::create(
-                &public_sale_address,
-                &recipient,
-                amount,
-                "",
-                "",
-                "Initial distribution",
-                &signature,
-                &pg_pool,
-            )
-            .await
-            {
-                Ledger::apply_transaction(&tx, &mut query_sync).await?;
-                transactions.push(tx);
-            }
-        }
-
-        // Create a new block
-        if !transactions.is_empty() {
-            let (last_index, last_hash) = blockchain::Block::get_last_block_meta(&pg_pool).await?;
-            let index = last_index + 1;
-            let timestamp = Utils::current_timestamp();
-            let previous_hash = last_hash;
-
-            let block = Block {
-                index,
-                timestamp,
-                previous_hash,
-                transactions: transactions.clone(),
-                hash: String::new(),
-            };
-
-            let mut finalized_block = block;
-            finalized_block.hash = finalized_block.calculate_hash();
-
-            blockchain::Block::save_to_db(&finalized_block, &mut query_sync).await?;
-            for tx in &finalized_block.transactions {
-                blockchain::Transaction::save_to_db(tx, finalized_block.index, &mut query_sync)
-                    .await?;
+                // Transaction
+                if let Some(tx) = blockchain::Transaction::create(
+                    &public_sale_address,
+                    &recipient,
+                    amount,
+                    "",
+                    "",
+                    "Initial distribution",
+                    &signature,
+                    &pg_pool,
+                )
+                .await
+                {
+                    Ledger::apply_transaction(&tx, &mut query_sync).await?;
+                    transactions.push(tx);
+                }
             }
 
-            query_sync.commit().await?;
-        }
+            // Create a new block
+            if !transactions.is_empty() {
+                let (last_index, last_hash) =
+                    blockchain::Block::get_last_block_meta(&pg_pool).await?;
+                let index = last_index + 1;
+                let timestamp = Utils::current_timestamp();
+                let previous_hash = last_hash;
 
-        Ok(())
+                let block = Block {
+                    index,
+                    timestamp,
+                    previous_hash,
+                    transactions: transactions.clone(),
+                    hash: String::new(),
+                };
+
+                let mut finalized_block = block;
+                finalized_block.hash = finalized_block.calculate_hash();
+
+                blockchain::Block::save_to_db(&finalized_block, &mut query_sync).await?;
+                for tx in &finalized_block.transactions {
+                    blockchain::Transaction::save_to_db(tx, finalized_block.index, &mut query_sync)
+                        .await?;
+                }
+            }
+
+            Ok::<(), Box<dyn std::error::Error>>(())
+        };
+
+        match result {
+            Ok(_) => {
+                query_sync.commit().await?;
+                Ok(())
+            }
+            Err(e) => {
+                query_sync.rollback().await.ok();
+                Err(e)
+            }
+        }
     }
 }

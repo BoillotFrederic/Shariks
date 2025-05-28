@@ -29,35 +29,44 @@ impl Ledger {
 
         // Sender amount
         if tx.sender != genesis {
-            let sender_balance: i64 = sqlx::query_scalar!(
-                "SELECT balance FROM core.wallet_balances WHERE address = $1",
-                tx.sender
+            let sender_balance: i64 = Utils::with_timeout(
+                sqlx::query_scalar!(
+                    "SELECT balance FROM core.wallet_balances WHERE address = $1",
+                    tx.sender
+                )
+                .fetch_one(&mut **query_sync),
+                90,
             )
-            .fetch_one(&mut **query_sync)
             .await?;
 
             if sender_balance < total as i64 {
                 return Err(sqlx::Error::RowNotFound);
             }
 
-            sqlx::query!(
-                "UPDATE core.wallet_balances SET balance = balance - $1 WHERE address = $2",
-                total as i64,
-                tx.sender
+            Utils::with_timeout(
+                sqlx::query!(
+                    "UPDATE core.wallet_balances SET balance = balance - $1 WHERE address = $2",
+                    total as i64,
+                    tx.sender
+                )
+                .execute(&mut **query_sync),
+                90,
             )
-            .execute(&mut **query_sync)
             .await?;
         }
 
         // Payment
-        sqlx::query!(
-            "INSERT INTO core.wallet_balances (address, balance)
-         VALUES ($1, $2)
-         ON CONFLICT (address) DO UPDATE SET balance = wallet_balances.balance + $2",
-            tx.recipient,
-            tx.amount as i64
+        Utils::with_timeout(
+            sqlx::query!(
+                "INSERT INTO core.wallet_balances (address, balance)
+                 VALUES ($1, $2)
+                 ON CONFLICT (address) DO UPDATE SET balance = wallet_balances.balance + $2",
+                tx.recipient,
+                tx.amount as i64
+            )
+            .execute(&mut **query_sync),
+            90,
         )
-        .execute(&mut **query_sync)
         .await?;
 
         // Fee distributions
@@ -66,14 +75,17 @@ impl Ledger {
             tx.fee_rule.clone(),
             tx.referrer.clone(),
         ) {
-            sqlx::query!(
-                "INSERT INTO core.wallet_balances (address, balance)
-             VALUES ($1, $2)
-             ON CONFLICT (address) DO UPDATE SET balance = core.wallet_balances.balance + $2",
-                addr,
-                amount as i64
+            Utils::with_timeout(
+                sqlx::query!(
+                    "INSERT INTO core.wallet_balances (address, balance)
+                     VALUES ($1, $2)
+                     ON CONFLICT (address) DO UPDATE SET balance = core.wallet_balances.balance + $2",
+                    addr,
+                    amount as i64
+                )
+                .execute(&mut **query_sync),
+                90,
             )
-            .execute(&mut **query_sync)
             .await?;
         }
 
@@ -85,9 +97,12 @@ impl Ledger {
         pool: &PgPool,
         expected_total: u64,
     ) -> Result<bool, sqlx::Error> {
-        let row = sqlx::query!("SELECT SUM(balance)::BIGINT AS total FROM core.wallet_balances")
-            .fetch_one(pool)
-            .await?;
+        let row = Utils::with_timeout(
+            sqlx::query!("SELECT SUM(balance)::BIGINT AS total FROM core.wallet_balances")
+                .fetch_one(pool),
+            30,
+        )
+        .await?;
 
         let total_u64 = row.total.unwrap_or(0).max(0) as u64;
 
@@ -104,11 +119,14 @@ impl Ledger {
 
     /// Find the number of tokens held by a wallet
     pub async fn get_balance(pool: &PgPool, address: &str) -> Result<u64, Error> {
-        let balance = sqlx::query_scalar!(
-            "SELECT balance FROM core.wallet_balances WHERE address = $1",
-            address
+        let balance = Utils::with_timeout(
+            sqlx::query_scalar!(
+                "SELECT balance FROM core.wallet_balances WHERE address = $1",
+                address
+            )
+            .fetch_optional(pool),
+            30,
         )
-        .fetch_optional(pool)
         .await?
         .unwrap_or(0);
 
@@ -119,10 +137,12 @@ impl Ledger {
     pub async fn view_balances(pool: &PgPool) -> Result<(), sqlx::Error> {
         println!("\n--- Wallet balances ---");
 
-        let rows =
+        let rows = Utils::with_timeout(
             sqlx::query!("SELECT address, balance FROM core.wallet_balances ORDER BY balance DESC")
-                .fetch_all(pool)
-                .await?;
+                .fetch_all(pool),
+            30,
+        )
+        .await?;
 
         for row in rows {
             println!(

@@ -30,7 +30,6 @@
 
 // Dependencies
 use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
-use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row, Transaction as QuerySync};
 
@@ -38,6 +37,7 @@ use sqlx::{PgPool, Row, Transaction as QuerySync};
 use crate::blockchain::*;
 use crate::encryption::*;
 use crate::ledger::*;
+use crate::utils::*;
 use crate::vault::*;
 use crate::wallet::*;
 
@@ -99,23 +99,26 @@ impl Staking {
             let mut stream = sqlx::query(&sql).fetch(pg_pool);
 
             // Set
-            while let Some(row) = stream.next().await {
+            while let Some(row) = Utils::with_timeout_next(&mut stream, 30).await? {
                 let row = row?;
                 let address: String = row.get("address");
                 let balance: i64 = row.get("balance");
                 let score = (balance as u64).min(STAKING_CAP);
 
-                sqlx::query!(
-                    r#"
-                    INSERT INTO core.staking_scores (address, score)
-                    VALUES ($1, $2)
-                    ON CONFLICT (address)
-                    DO UPDATE SET score = staking_scores.score + $2
-                    "#,
-                    address,
-                    score as i64
+                Utils::with_timeout(
+                    sqlx::query!(
+                        r#"
+                        INSERT INTO core.staking_scores (address, score)
+                        VALUES ($1, $2)
+                        ON CONFLICT (address)
+                        DO UPDATE SET score = staking_scores.score + $2
+                        "#,
+                        address,
+                        score as i64
+                    )
+                    .execute(pg_pool),
+                    30,
                 )
-                .execute(pg_pool)
                 .await?;
             }
 
@@ -133,16 +136,19 @@ impl Staking {
         staking_private_key: &str,
     ) -> Result<(), DynError> {
         // Get total score
-        let total_score: i64 = sqlx::query_scalar!(
-            r#"
-            SELECT SUM(score)::BIGINT as total_score
-            FROM core.staking_scores
-            WHERE completed = false
-            "#
+        let value: Option<i64> = Utils::with_timeout(
+            sqlx::query_scalar!(
+                r#"
+                SELECT SUM(score)::BIGINT as total_score
+                FROM core.staking_scores
+                WHERE completed = false
+                "#
+            )
+            .fetch_one(pg_pool),
+            30,
         )
-        .fetch_one(pg_pool)
-        .await?
-        .unwrap_or(0);
+        .await?;
+        let total_score = value.unwrap_or(0);
 
         // Exists if no score found
         if total_score == 0 {
@@ -155,14 +161,14 @@ impl Staking {
         let mut addr_buffer: Vec<String> = Vec::with_capacity(1000);
 
         let sql = r#"
-                SELECT address, score
-                FROM core.staking_scores
-                WHERE completed = false AND score > 0
+            SELECT address, score
+            FROM core.staking_scores
+            WHERE completed = false AND score > 0
             "#;
 
         let mut stream = sqlx::query(sql).fetch(pg_pool);
 
-        while let Some(row) = stream.next().await {
+        while let Some(row) = Utils::with_timeout_next(&mut stream, 30).await? {
             let row = row?;
             let address: String = row.get("address");
             let score: i64 = row.get("score");
@@ -232,15 +238,18 @@ impl Staking {
             }
 
             for address in addresses {
-                sqlx::query(
-                    r#"
-                    UPDATE core.staking_scores
-                    SET completed = TRUE
-                    WHERE address = $1
-                    "#,
+                Utils::with_timeout(
+                    sqlx::query(
+                        r#"
+                        UPDATE core.staking_scores
+                        SET completed = TRUE
+                        WHERE address = $1
+                        "#,
+                    )
+                    .bind(address)
+                    .execute(&mut *tx),
+                    90,
                 )
-                .bind(address)
-                .execute(&mut *tx)
                 .await?;
             }
 
@@ -295,15 +304,17 @@ impl Staking {
             let table_name = format!("snapshot.wallet_balances_snapshot_day_{:02}", day);
 
             let sql = format!("DROP TABLE IF EXISTS {};", table_name);
-            sqlx::query(&sql).execute(pg_pool).await?;
+            Utils::with_timeout(sqlx::query(&sql).execute(pg_pool), 30).await?;
         }
 
         // Clear the score table
-        sqlx::query("DELETE FROM core.staking_scores")
-            .execute(pg_pool)
-            .await?;
+        Utils::with_timeout(
+            sqlx::query("DELETE FROM core.staking_scores").execute(pg_pool),
+            30,
+        )
+        .await?;
 
-        println!("Table staking_scores vidée.");
+        println!("Table staking_scores emptied");
         Ok(())
     }
 
@@ -323,7 +334,7 @@ impl Staking {
             "CREATE TABLE IF NOT EXISTS {} AS SELECT * FROM core.wallet_balances;",
             snapshot_table
         );
-        sqlx::query(&sql).execute(pg_pool).await?;
+        Utils::with_timeout(sqlx::query(&sql).execute(pg_pool), 90).await?;
 
         println!("Snapshot day has been created : {}", snapshot_table);
         Ok(())
@@ -333,7 +344,7 @@ impl Staking {
     #[allow(unused)]
     pub async fn delete_snapshot(pg_pool: &PgPool, table_name: i32) -> Result<(), DynError> {
         let sql = format!("DROP TABLE IF EXISTS {};", table_name);
-        sqlx::query(&sql).execute(pg_pool).await?;
+        Utils::with_timeout(sqlx::query(&sql).execute(pg_pool), 30).await?;
 
         println!("Snapshot has been deleted : {}", table_name);
         Ok(())

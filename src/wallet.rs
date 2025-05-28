@@ -66,16 +66,19 @@ impl Wallet {
 
         // Check if the wallet is one of the first 100 referrals of the referrer
         let is_first_referrer = if referrer_found {
-            let updated = sqlx::query!(
-                r#"
+            let updated = Utils::with_timeout(
+                sqlx::query!(
+                    r#"
                 UPDATE core.wallets
                 SET referrer_count = referrer_count + 1
                 WHERE address = $1
                 RETURNING referrer_count
                 "#,
-                referrer
+                    referrer
+                )
+                .fetch_one(pg_pool),
+                30,
             )
-            .fetch_one(pg_pool)
             .await;
 
             match updated {
@@ -120,7 +123,7 @@ impl Wallet {
         };
 
         // Insert the wallet
-        if let Err(e) = sqlx::query!(
+        if let Err(e) = Utils::with_timeout(sqlx::query!(
             r#"
             INSERT INTO core.wallets (address, dh_public, referrer, first_referrer, exempt_fee, staking_available)
             VALUES ($1, $2, $3, $4, $5, $6)
@@ -132,7 +135,7 @@ impl Wallet {
             exempt_fee,
             staking_available
         )
-        .execute(pg_pool)
+        .execute(pg_pool), 30)
         .await
         {
             eprintln!("Error : insert wallet : {}", e);
@@ -144,21 +147,24 @@ impl Wallet {
 
     /// Find a wallet
     pub async fn find(pool: &PgPool, address: &str) -> Result<Wallet, Error> {
-        let result = sqlx::query_as!(
-            Wallet,
-            r#"
-            SELECT
-                address,
-                referrer,
-                first_referrer,
-                staking_available,
-                last_login as "last_login: DateTime<chrono::Utc>"
-            FROM core.wallets
-            WHERE address = $1
-            "#,
-            address
+        let result = Utils::with_timeout(
+            sqlx::query_as!(
+                Wallet,
+                r#"
+                SELECT
+                    address,
+                    referrer,
+                    first_referrer,
+                    staking_available,
+                    last_login as "last_login: DateTime<chrono::Utc>"
+                FROM core.wallets
+                WHERE address = $1
+                "#,
+                address
+            )
+            .fetch_optional(pool),
+            30,
         )
-        .fetch_optional(pool)
         .await?;
 
         Ok(result.unwrap_or(Wallet {
@@ -172,15 +178,18 @@ impl Wallet {
 
     /// Checking if wallet exists
     pub async fn exists(pool: &PgPool, address: &str) -> Result<bool, Error> {
-        let exists = sqlx::query_scalar!(
-            r#"
-            SELECT EXISTS (
+        let exists = Utils::with_timeout(
+            sqlx::query_scalar!(
+                r#"
+                SELECT EXISTS (
                 SELECT 1 FROM core.wallets WHERE address = $1
             )
             "#,
-            address
+                address
+            )
+            .fetch_one(pool),
+            30,
         )
-        .fetch_one(pool)
         .await?;
 
         Ok(exists.unwrap_or(false))
@@ -193,21 +202,25 @@ impl Wallet {
         last_login < limit
     }
 
-    // /// Updates the last wallet connection
-    // pub async fn update_last_login(pool: &PgPool, address: &str) -> Result<(), sqlx::Error> {
-    //     sqlx::query!(
-    //         r#"
-    //     UPDATE wallets
-    //     SET last_login = now()
-    //     WHERE address = $1
-    //     "#,
-    //         address
-    //     )
-    //     .execute(pool)
-    //     .await?;
-    //
-    //     Ok(())
-    // }
+    /// Updates the last wallet connection
+    #[allow(unused)]
+    pub async fn update_last_login(pool: &PgPool, address: &str) -> Result<(), sqlx::Error> {
+        Utils::with_timeout(
+            sqlx::query!(
+                r#"
+                UPDATE core.wallets
+                SET last_login = now()
+                WHERE address = $1
+                "#,
+                address
+            )
+            .execute(pool),
+            30,
+        )
+        .await?;
+
+        Ok(())
+    }
 
     /// Check if the address starts with the correct prefix
     pub fn check_prefix(address: &str) -> bool {
@@ -216,15 +229,18 @@ impl Wallet {
 
     /// Checking if an address is exempt from fees
     pub async fn is_exempt_fee(pg_pool: &PgPool, address: &str) -> Result<bool, Error> {
-        let exists = sqlx::query_scalar!(
-            r#"
-            SELECT EXISTS (
-                SELECT 1 FROM core.wallets WHERE address = $1 and exempt_fee = true
+        let exists = Utils::with_timeout(
+            sqlx::query_scalar!(
+                r#"
+                SELECT EXISTS (
+                    SELECT 1 FROM core.wallets WHERE address = $1 and exempt_fee = true
+                )
+                "#,
+                address
             )
-            "#,
-            address
+            .fetch_one(pg_pool),
+            30,
         )
-        .fetch_one(pg_pool)
         .await?;
 
         Ok(exists.unwrap_or(false))
@@ -237,15 +253,18 @@ impl Wallet {
 
     /// Print all created wallets
     pub async fn print_all(pool: &PgPool) -> Result<(), Error> {
-        let wallets = sqlx::query_as!(
-            Wallet,
-            r#"
-            SELECT address, referrer, first_referrer, staking_available,
-            last_login as "last_login: DateTime<chrono::Utc>"
-            FROM core.wallets
-            "#
+        let wallets = Utils::with_timeout(
+            sqlx::query_as!(
+                Wallet,
+                r#"
+                SELECT address, referrer, first_referrer, staking_available,
+                last_login as "last_login: DateTime<chrono::Utc>"
+                FROM core.wallets
+                "#
+            )
+            .fetch_all(pool),
+            30,
         )
-        .fetch_all(pool)
         .await?;
 
         for wallet in wallets {

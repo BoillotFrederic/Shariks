@@ -5,12 +5,14 @@
 //! and aim to reduce duplication in core logic.
 
 // Dependencies
+use futures::StreamExt;
 use rpassword::read_password;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::{self, Read, Write};
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::time;
 
 // Utils
 // -----
@@ -49,19 +51,30 @@ impl Utils {
             .as_millis()
     }
 
-    /*
-    // let rows = with_timeout(sqlx::query("...").fetch_all(&pool), 10).await?;
-    async fn with_timeout<T>(
-        fut: impl std::future::Future<Output = T>,
+    /// SQLX query with a timeout
+    pub async fn with_timeout<T, F>(fut: F, secs: u64) -> Result<T, sqlx::Error>
+    where
+        F: std::future::Future<Output = Result<T, sqlx::Error>> + Send,
+    {
+        time::timeout(Duration::from_secs(secs), fut)
+            .await
+            .map_err(|_| sqlx::Error::Protocol("Timeout".into()))?
+    }
+
+    /// SQLX query streamed with a timeout
+    pub async fn with_timeout_next<'a, S>(
+        stream: &'a mut S,
         secs: u64,
-    ) -> Result<T, &'static str> {
-        tokio::time::timeout(Duration::from_secs(secs), fut)
+    ) -> Result<Option<S::Item>, &'static str>
+    where
+        S: futures::Stream + Unpin,
+    {
+        tokio::time::timeout(Duration::from_secs(secs), stream.next())
             .await
             .map_err(|_| "Timeout")
     }
-    */
 
-    // Increment a file
+    /// Increment a file
     #[allow(unused)]
     pub fn increment_file<P: AsRef<Path>>(file_path: P) -> io::Result<u64> {
         let mut file = OpenOptions::new()

@@ -39,7 +39,7 @@ use wallet::*;
 async fn main() -> Result<(), sqlx::Error> {
     println!("Initialization start");
 
-    // Connect to dotenv
+    // Read dotenv
     dotenvy::dotenv().ok();
 
     // Connect to database
@@ -54,7 +54,7 @@ async fn main() -> Result<(), sqlx::Error> {
         };
     }
 
-    // Transaction ask
+    // CLI ask
     loop {
         println!("\n--- Menu ---");
         println!("1. Add transaction");
@@ -88,7 +88,7 @@ async fn main() -> Result<(), sqlx::Error> {
                 let sender_dh_secret_str = Utils::prompt_secret("Secret DH :");
                 let private_key = Utils::prompt_secret("Private key :");
 
-                // Memo
+                // CLI - Memo
                 let (recipient_dh_public_str, recipient_dh_public_opt) =
                     Encryption::get_dh_public_key_data_by_address(&pg_pool, &recipient).await?;
 
@@ -150,10 +150,24 @@ async fn main() -> Result<(), sqlx::Error> {
 
                     // Finalize transaction
                     let mut query_sync = pg_pool.begin().await?;
-                    blockchain::Block::save_to_db(&block, &mut query_sync).await?;
-                    blockchain::Transaction::save_to_db(&tx, block.index, &mut query_sync).await?;
-                    Ledger::apply_transaction(&tx, &mut query_sync).await?;
-                    query_sync.commit().await?;
+
+                    let result = {
+                        blockchain::Block::save_to_db(&block, &mut query_sync).await?;
+                        blockchain::Transaction::save_to_db(&tx, block.index, &mut query_sync)
+                            .await?;
+                        Ledger::apply_transaction(&tx, &mut query_sync).await?;
+
+                        Ok::<(), Box<dyn std::error::Error>>(())
+                    };
+
+                    match result {
+                        Ok(_) => {
+                            query_sync.commit().await?;
+                        }
+                        Err(_e) => {
+                            query_sync.rollback().await.ok();
+                        }
+                    }
 
                     println!("\nTransaction : {:?}", block);
                 }
@@ -283,7 +297,7 @@ async fn main() -> Result<(), sqlx::Error> {
                 println!("Bye !");
                 break;
             }
-            // invalid choise
+            // Invalid choise
             _ => println!("Error : invalid choise"),
         }
     }

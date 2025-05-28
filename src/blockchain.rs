@@ -77,9 +77,12 @@ impl Block {
 
     /// Finds the index and hash of the last added block
     pub async fn get_last_block_meta(pool: &PgPool) -> Result<(u64, String), sqlx::Error> {
-        let row = sqlx::query!("SELECT index, hash FROM core.blocks ORDER BY index DESC LIMIT 1")
-            .fetch_optional(pool)
-            .await?;
+        let row = Utils::with_timeout(
+            sqlx::query!("SELECT index, hash FROM core.blocks ORDER BY index DESC LIMIT 1")
+                .fetch_optional(pool),
+            30,
+        )
+        .await?;
 
         if let Some(r) = row {
             Ok((r.index as u64, r.hash))
@@ -95,16 +98,19 @@ impl Block {
     ) -> Result<(), sqlx::Error> {
         let block_json = serde_json::to_value(&block).unwrap();
 
-        sqlx::query!(
-            "INSERT INTO core.blocks (index, timestamp, previous_hash, hash, raw_json)
+        Utils::with_timeout(
+            sqlx::query!(
+                "INSERT INTO core.blocks (index, timestamp, previous_hash, hash, raw_json)
          VALUES ($1, $2, $3, $4, $5)",
-            block.index as i64,
-            block.timestamp as i64,
-            block.previous_hash,
-            block.hash,
-            block_json
+                block.index as i64,
+                block.timestamp as i64,
+                block.previous_hash,
+                block.hash,
+                block_json
+            )
+            .execute(&mut **query_sync),
+            90,
         )
-        .execute(&mut **query_sync)
         .await?;
 
         Ok(())
@@ -282,8 +288,9 @@ impl Transaction {
         block_index: u64,
         query_sync: &mut QuerySync<'_, Postgres>,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query!(
-            "INSERT INTO core.transactions (
+        Utils::with_timeout(
+            sqlx::query!(
+                "INSERT INTO core.transactions (
             id, block_index,
             sender, recipient, amount, fee,
             fee_founder, fee_treasury, fee_staking, fee_referral,
@@ -296,24 +303,26 @@ impl Transaction {
             $11, $12, $13,
             $14, $15, $16
         )",
-            tx.id,
-            block_index as i64,
-            tx.sender,
-            tx.recipient,
-            tx.amount as i64,
-            tx.fee as i64,
-            tx.fee_rule.founder_percentage as i32,
-            tx.fee_rule.treasury_percentage as i32,
-            tx.fee_rule.staking_percentage as i32,
-            tx.fee_rule.referral_percentage as i32,
-            tx.timestamp as i64,
-            tx.signature,
-            tx.referrer,
-            tx.sender_dh_public,
-            tx.recipient_dh_public,
-            tx.memo
+                tx.id,
+                block_index as i64,
+                tx.sender,
+                tx.recipient,
+                tx.amount as i64,
+                tx.fee as i64,
+                tx.fee_rule.founder_percentage as i32,
+                tx.fee_rule.treasury_percentage as i32,
+                tx.fee_rule.staking_percentage as i32,
+                tx.fee_rule.referral_percentage as i32,
+                tx.timestamp as i64,
+                tx.signature,
+                tx.referrer,
+                tx.sender_dh_public,
+                tx.recipient_dh_public,
+                tx.memo
+            )
+            .execute(&mut **query_sync),
+            90,
         )
-        .execute(&mut **query_sync)
         .await?;
 
         Ok(())
@@ -403,34 +412,62 @@ impl Transaction {
 
 /// Checking that the blockchain does not already exist
 pub async fn is_empty(pool: &PgPool) -> Result<bool, sqlx::Error> {
-    let mut tx = pool.begin().await?;
+    let mut query_sync = pool.begin().await?;
 
     // Check if block exists
-    let count = sqlx::query_scalar!("SELECT COUNT(*) FROM core.blocks")
-        .fetch_one(&mut *tx)
-        .await?;
+    let count_opt = Utils::with_timeout(
+        sqlx::query_scalar!("SELECT COUNT(*) FROM core.blocks").fetch_one(&mut *query_sync),
+        90,
+    )
+    .await;
+
+    let count = match count_opt {
+        Ok(v) => v.unwrap_or(0),
+        Err(e) => {
+            query_sync.rollback().await.ok();
+            return Err(e);
+        }
+    };
 
     // Check genesis status
-    let genesis_done: bool =
+    let genesis_done_res = Utils::with_timeout(
         sqlx::query_scalar!("SELECT genesis_done FROM core.system_status WHERE id = 1")
-            .fetch_one(&mut *tx)
-            .await?;
+            .fetch_one(&mut *query_sync),
+        90,
+    )
+    .await;
+
+    let genesis_done = match genesis_done_res {
+        Ok(v) => v,
+        Err(e) => {
+            query_sync.rollback().await.ok();
+            return Err(e);
+        }
+    };
 
     // Lock to avoid concurrent init
-    sqlx::query!("LOCK TABLE core.blocks IN ACCESS EXCLUSIVE MODE")
-        .execute(&mut *tx)
-        .await?;
+    let lock_res = Utils::with_timeout(
+        sqlx::query!("LOCK TABLE core.blocks IN ACCESS EXCLUSIVE MODE").execute(&mut *query_sync),
+        90,
+    )
+    .await;
 
-    tx.commit().await?;
+    if let Err(e) = lock_res {
+        query_sync.rollback().await.ok();
+        return Err(e);
+    }
 
-    Ok(count.map_or(false, |n| n == 0) && !genesis_done)
+    query_sync.commit().await?;
+    Ok(count == 0 && !genesis_done)
 }
 
 /// Load all blocks in json from the database
 pub async fn load_blocks_from_db(pg_pool: &PgPool) -> Result<Vec<Block>, sqlx::Error> {
-    let rows = sqlx::query!("SELECT raw_json FROM core.blocks ORDER BY index ASC")
-        .fetch_all(pg_pool)
-        .await?;
+    let rows = Utils::with_timeout(
+        sqlx::query!("SELECT raw_json FROM core.blocks ORDER BY index ASC").fetch_all(pg_pool),
+        30,
+    )
+    .await?;
 
     let mut blocks = Vec::new();
     for row in rows {

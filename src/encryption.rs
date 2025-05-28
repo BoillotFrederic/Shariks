@@ -19,6 +19,7 @@ use x25519_dalek::{PublicKey as XPublicKey, StaticSecret};
 
 // Crates
 use crate::Wallet;
+use crate::utils::*;
 
 // Encryption
 // ----------
@@ -181,15 +182,18 @@ impl Encryption {
         pool: &PgPool,
         address: &str,
     ) -> Result<(String, Option<XPublicKey>), sqlx::Error> {
-        let result = sqlx::query!(
-            r#"
-        SELECT dh_public
-        FROM core.wallets
-        WHERE address = $1
-        "#,
-            address
+        let result = Utils::with_timeout(
+            sqlx::query!(
+                r#"
+                SELECT dh_public
+                FROM core.wallets
+                WHERE address = $1
+                "#,
+                address
+            )
+            .fetch_optional(pool),
+            30,
         )
-        .fetch_optional(pool)
         .await?;
 
         if let Some(row) = result {
