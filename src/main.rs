@@ -67,9 +67,10 @@ async fn main() -> Result<(), sqlx::Error> {
         println!("8. Decrypt memo");
         println!("9. Fake insert for token distribution test (coming soon)");
         println!("10. Distribute staking wallet for the last month");
-        println!("11. Write secret wallet");
-        println!("12. Read secret vault");
-        println!("13. Quit");
+        println!("11. Check and fix ledger with blockchain reading");
+        println!("12. Write secret wallet");
+        println!("13. Read secret vault");
+        println!("14. Quit");
 
         let mut choice = String::new();
 
@@ -256,12 +257,24 @@ async fn main() -> Result<(), sqlx::Error> {
                     if let Err(e) = rt.block_on(Staking::execute_monthly_staking_distribution(
                         &pg_pool_clone,
                     )) {
-                        eprintln!("Erreur staking : {}", e);
+                        eprintln!("Error : staking : {}", e);
+                    }
+                });
+            }
+            // CLI - check and fix ledger with blockchain reading
+            "11" => {
+                let pg_pool_clone = pg_pool.clone();
+                tokio::task::spawn_blocking(move || {
+                    let rt = tokio::runtime::Runtime::new().unwrap();
+                    if let Err(e) =
+                        rt.block_on(blockchain::verify_and_resync_ledger(&pg_pool_clone))
+                    {
+                        eprintln!("Error : check and fix ledger : {}", e);
                     }
                 });
             }
             // CLI - write a secret wallet
-            "11" => {
+            "12" => {
                 let wallet_secret = vault::WalletSecret {
                     mnemonic: "mnemonic test".to_string(),
                     passphrase: "passphrase test".to_string(),
@@ -278,7 +291,7 @@ async fn main() -> Result<(), sqlx::Error> {
                 };
             }
             // CLI - read a secret wallet
-            "12" => {
+            "13" => {
                 let name = Utils::prompt("Name : ");
                 match VaultService::get_owner_secret(&name).await {
                     Ok(secret) => {
@@ -293,7 +306,7 @@ async fn main() -> Result<(), sqlx::Error> {
                 };
             }
             // CLI - quit
-            "13" => {
+            "14" => {
                 println!("Bye !");
                 break;
             }

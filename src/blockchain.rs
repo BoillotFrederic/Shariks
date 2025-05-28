@@ -10,7 +10,7 @@ use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json;
 use sha2::{Digest, Sha256};
-use sqlx::{PgPool, Postgres, Transaction as QuerySync};
+use sqlx::{PgPool, Postgres, Row, Transaction as QuerySync};
 use uuid::Uuid;
 
 // Crates
@@ -478,22 +478,24 @@ pub async fn load_blocks_from_db(pg_pool: &PgPool) -> Result<Vec<Block>, sqlx::E
     Ok(blocks)
 }
 
-/*pub async fn verify_and_resync_ledger(pg_pool: &PgPool) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Relecture complète de la blockchain (mode SQL stream)...");
-
-    // Étape 1 : Créer une table temporaire pour reconstruire les soldes
-    sqlx::query(
-        r#"
-        CREATE TEMP TABLE tmp_ledger_sync (
-            address TEXT PRIMARY KEY,
-            balance BIGINT NOT NULL DEFAULT 0
-        ) ON COMMIT DROP;
-        "#,
+/// Check and fix ledger with blockchain reading
+pub async fn verify_and_resync_ledger(pg_pool: &PgPool) -> Result<(), Box<dyn std::error::Error>> {
+    // Create a ledger temp table
+    Utils::with_timeout(
+        sqlx::query(
+            r#"
+            CREATE TEMP TABLE tmp_ledger_sync (
+                address TEXT PRIMARY KEY,
+                balance BIGINT NOT NULL DEFAULT 0
+            ) ON COMMIT DROP;
+            "#,
+        )
+        .execute(pg_pool),
+        120,
     )
-    .execute(pg_pool)
     .await?;
 
-    // Étape 2 : Stream des blocs
+    // Streamed blocks
     let mut block_stream = sqlx::query!(
         r#"
         SELECT index
@@ -503,7 +505,7 @@ pub async fn load_blocks_from_db(pg_pool: &PgPool) -> Result<Vec<Block>, sqlx::E
     )
     .fetch(pg_pool);
 
-    while let Some(row) = block_stream.next().await {
+    while let Some(row) = Utils::with_timeout_next(&mut block_stream, 120).await? {
         let block = row?;
         let tx_stream = sqlx::query!(
             r#"
@@ -515,75 +517,109 @@ pub async fn load_blocks_from_db(pg_pool: &PgPool) -> Result<Vec<Block>, sqlx::E
         )
         .fetch(pg_pool);
 
-        tokio::pin!(tx_stream); // pour rendre la stream utilisable plusieurs fois
+        tokio::pin!(tx_stream);
 
-        while let Some(tx_row) = tx_stream.next().await {
+        while let Some(tx_row) = Utils::with_timeout_next(&mut tx_stream, 120).await? {
             let tx = tx_row?;
             let amount = tx.amount.max(0) as i64;
 
-            // Déduire du sender (sauf SRKS_GENESIS)
+            // Deduce from sender (except SRKS_GENESIS)
             if tx.sender != "SRKS_GENESIS" {
-                sqlx::query(
-                    r#"
-                    INSERT INTO tmp_ledger_sync (address, balance)
-                    VALUES ($1, -$2)
-                    ON CONFLICT (address)
-                    DO UPDATE SET balance = tmp_ledger_sync.balance - $2
-                    "#,
+                Utils::with_timeout(
+                    sqlx::query(
+                        r#"
+                        INSERT INTO tmp_ledger_sync (address, balance)
+                        VALUES ($1, -$2)
+                        ON CONFLICT (address)
+                        DO UPDATE SET balance = tmp_ledger_sync.balance - $2
+                        "#,
+                    )
+                    .bind(&tx.sender)
+                    .bind(amount)
+                    .execute(pg_pool),
+                    120,
                 )
-                .bind(&tx.sender)
-                .bind(amount)
-                .execute(pg_pool)
                 .await?;
             }
 
-            // Ajouter au recipient
-            sqlx::query(
-                r#"
-                INSERT INTO tmp_ledger_sync (address, balance)
-                VALUES ($1, $2)
-                ON CONFLICT (address)
-                DO UPDATE SET balance = tmp_ledger_sync.balance + $2
-                "#,
+            // Add to recipient
+            Utils::with_timeout(
+                sqlx::query(
+                    r#"
+                    INSERT INTO tmp_ledger_sync (address, balance)
+                    VALUES ($1, $2)
+                    ON CONFLICT (address)
+                    DO UPDATE SET balance = tmp_ledger_sync.balance + $2
+                    "#,
+                )
+                .bind(&tx.recipient)
+                .bind(amount)
+                .execute(pg_pool),
+                120,
             )
-            .bind(&tx.recipient)
-            .bind(amount)
-            .execute(pg_pool)
             .await?;
         }
     }
 
-    // Étape 3 : Vérification des soldes
+    // Checking balances
     let mut desync_count = 0;
 
-    let mut real_ledger = sqlx::query!(
+    let mut real_ledger = sqlx::query(
         r#"
         SELECT wl.address, wl.balance, COALESCE(tmp.balance, 0) AS expected
         FROM core.wallet_balances wl
         LEFT JOIN tmp_ledger_sync tmp ON wl.address = tmp.address
-        "#
+        "#,
     )
     .fetch(pg_pool);
 
-    while let Some(row) = real_ledger.next().await {
+    while let Some(row) = Utils::with_timeout_next(&mut real_ledger, 120).await? {
         let r = row?;
-        if r.balance != r.expected {
+        let address: String = r.get("address");
+        let balance: i64 = r.get("balance");
+        let expected: i64 = r.get("expected");
+
+        if balance != expected {
             println!(
-                "Désynchronisation : {} → réel = {}, attendu = {}",
-                r.address, r.balance, r.expected
+                "Desynchronization : {} → real = {}, expected = {}",
+                address, balance, expected
             );
             desync_count += 1;
         }
     }
 
     if desync_count == 0 {
-        println!("Ledger parfaitement synchronisé !");
+        println!("Ledger perfectly synchronized !");
     } else {
-        println!("{} désynchronisations détectées.", desync_count);
+        println!("{} desynchronizations detected", desync_count);
     }
 
+    // Fix all desynchronizations
+    if desync_count > 0 {
+        Utils::with_timeout(
+            sqlx::query(
+                r#"
+                UPDATE core.wallet_balances wl
+                SET balance = tmp.balance
+                FROM tmp_ledger_sync tmp
+                WHERE wl.address = tmp.address AND wl.balance != tmp.balance
+                "#,
+            )
+            .execute(pg_pool),
+            120,
+        )
+        .await?;
+    }
+
+    // Drop table temp
+    Utils::with_timeout(
+        sqlx::query("DROP TABLE IF EXISTS tmp_ledger_sync;").execute(pg_pool),
+        120,
+    )
+    .await?;
+
     Ok(())
-}*/
+}
 
 /// Convert SRKS units to nanosrks
 pub fn to_nanosrks(srks: f64) -> u64 {
