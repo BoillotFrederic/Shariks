@@ -1,16 +1,17 @@
-# Shariks Chain - Whitepaper (en developpement)
+# Shariks Chain - Whitepaper (v1.1 – mai 2025)
 
 ## Introduction
-Shariks est un réseau blockchain de nouvelle génération conçu pour être léger, économe en ressources, et centré sur l’engagement communautaire grâce à un mécanisme hybride alliant PoR (Proof of Relay) et PoS (Proof of Stake).
+Shariks Chain est une blockchain de nouvelle génération développée en Rust, pensée pour être légère, écologique et résolument communautaire. Elle repose sur un mécanisme hybride combinant le Proof of Stake (PoS) et le Proof of Relay (PoR)
 
 ## Vision
-Créer une crypto qui ne dépend pas de la puissance de calcul ou d'infrastructures complexes, tout en récompensant équitablement les utilisateurs actifs et engagés.
+Créer un réseau 100 % souverain, économe en ressources, sans Proof of Work, et dont les récompenses sont redistribuées à la communauté selon la participation réelle - sans mint, ni burn
 
 ---
 
 ## Mécanismes clés
 
 ### Proof of Relay (PoR)
+- Chaque wallet peut parrainer de nouveaux utilisateurs
 - Le réseau récompense les parrainages : chaque transaction émise par un filleul génère des récompenses pour son parrain.
 - Illimité dans le temps : tant que le filleul est actif, le parrain continue de recevoir des récompenses.
 - **Bonus Parrainage** : les 100 premiers filleuls d’un utilisateur lui rapportent 10% de récompense en plus à vie.
@@ -19,10 +20,11 @@ Créer une crypto qui ne dépend pas de la puissance de calcul ou d'infrastructu
 - Toute adresse détenant des jetons reçoit des "dividendes" mensuels issus des frais de transactions.
 - Pas de génération magique de tokens : les récompenses proviennent exclusivement des **frais collectés**.
 - Un système comptable tient compte du **temps exact de détention**, malgré les mouvements, pour assurer une distribution équitable (type "livret A").
+- Plafond de prise en compte : maximum 1 000 000 SRKS par wallet dans le calcul des scores (pour éviter les dominations).
 
 ### Inactivité
 - Si un wallet ne s’est **pas connecté au réseau depuis 1 an**, il **cesse temporairement de recevoir** des récompenses.
-- La distribution reprend dès qu’il redevient actif.
+- La distribution reprend de zéro dès qu’il redevient actif.
 
 ---
 
@@ -48,6 +50,25 @@ Créer une crypto qui ne dépend pas de la puissance de calcul ou d'infrastructu
 | Staking/Dividendes   | 10%                 | 10%                                                       |
 | Trésorerie           | 30%                 | 30%                                                       |
 
+---
+
+### Ledger & synchronisation
+- Le solde de chaque wallet est recalculé en temps réel via une base de données PostgreSQL.
+- Chaque jour :
+- - Un snapshot journalier est pris.
+- - Une vérification de cohérence complète est effectuée (hashs, soldes, supply).
+- Le système est conçu pour minimiser la RAM utilisée (SQL streamé, pas de HashMap Rust).
+
+---
+
+### Mécanisme à l’étude : expiration des wallets inactifs
+**Ce mécanisme n’est pas actif pour le moment**
+
+Un système de réaffectation des fonds inactifs au-delà de 20 ans est actuellement à l’étude. L’objectif est de réinjecter dans l’économie les tokens perdus ou abandonnés, tout en garantissant :
+
+- Transparence complète,
+- Notifications préalables,
+- Et, si possible, une méthode de récupération post-expiration (preuve d'identité, héritage, etc.).
 
 ---
 
@@ -61,6 +82,8 @@ Créer une crypto qui ne dépend pas de la puissance de calcul ou d'infrastructu
 - Ajout d’un explorateur de transactions.
 - Frontend simple pour visualiser les soldes, historiques, et système de parrainage.
 - API publique pour intégration tierce.
+- Mode serveur + client avec architecture actix-web + PostgreSQL.
+- Sécurisation via HashiCorp Vault ou systèmes externes pour les clés sensibles.
 
 ---
 
