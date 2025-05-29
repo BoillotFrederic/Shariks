@@ -37,6 +37,7 @@ use sqlx::{PgPool, Row, Transaction as QuerySync};
 use crate::blockchain::*;
 use crate::encryption::*;
 use crate::ledger::*;
+use crate::log::*;
 use crate::utils::*;
 use crate::vault::*;
 use crate::wallet::*;
@@ -125,7 +126,7 @@ impl Staking {
             current_day += Duration::days(1);
         }
 
-        println!("Calculate scores completed");
+        Log::info_msg("Staking", "calculate_scores", "Calculate scores completed");
         Ok(())
     }
 
@@ -215,7 +216,11 @@ impl Staking {
             Self::flush_block(pg_pool, &tx_buffer, &addr_buffer).await?;
         }
 
-        println!("Staking distribution completed !");
+        Log::info_msg(
+            "Staking",
+            "generate_distribution",
+            "Staking distribution completed",
+        );
         Ok(())
     }
 
@@ -270,6 +275,11 @@ impl Staking {
 
     /// Start disritution of staking token for the last month
     pub async fn execute_monthly_staking_distribution(pg_pool: &PgPool) -> Result<(), DynError> {
+        // Dafe date
+        pub fn safe_date(year: i32, month: u32, day: u32) -> Result<NaiveDate, DynError> {
+            NaiveDate::from_ymd_opt(year, month, day).ok_or_else(|| "Invalid date".into())
+        }
+
         // Last month
         let now = Utc::now().naive_utc().date();
         let (year, month) = if now.month() == 1 {
@@ -278,9 +288,30 @@ impl Staking {
             (now.year(), now.month() - 1)
         };
 
-        let from = NaiveDate::from_ymd_opt(year, month, 1).unwrap();
-        let to =
-            NaiveDate::from_ymd_opt(year, month, Self::num_days_in_month(year, month)).unwrap();
+        let from = match safe_date(year, month, 1) {
+            Ok(date) => date,
+            Err(e) => {
+                Log::error(
+                    "Staking",
+                    "calculate_scores",
+                    "Invalid first day of month",
+                    &e.to_string(),
+                );
+                return Err(e);
+            }
+        };
+        let to = match Self::last_day_of_month(year, month) {
+            Some(day) => safe_date(year, month, day)?,
+            None => {
+                Log::error(
+                    "Staking",
+                    "calculate_scores",
+                    "Invalid last day of month",
+                    format!("year: {}, month: {}", year, month),
+                );
+                return Err("Invalid last day of month".into());
+            }
+        };
 
         // Calculate the scores
         Self::calculate_scores(pg_pool, from, to).await?;
@@ -314,7 +345,11 @@ impl Staking {
         )
         .await?;
 
-        println!("Table staking_scores emptied");
+        Log::info_msg(
+            "Staking",
+            "purge_staking_scores_for_month",
+            "Table staking_scores emptied",
+        );
         Ok(())
     }
 
@@ -336,7 +371,7 @@ impl Staking {
         );
         Utils::with_timeout(sqlx::query(&sql).execute(pg_pool), 90).await?;
 
-        println!("Snapshot day has been created : {}", snapshot_table);
+        Log::info_msg("Staking", "snapshot_day", "Snapshot day has been created");
         Ok(())
     }
 
@@ -346,11 +381,12 @@ impl Staking {
         let sql = format!("DROP TABLE IF EXISTS {};", table_name);
         Utils::with_timeout(sqlx::query(&sql).execute(pg_pool), 30).await?;
 
-        println!("Snapshot has been deleted : {}", table_name);
+        Log::info_msg("Staking", "delete_snapshot", "Snapshot has been deleted");
         Ok(())
     }
 
     /// Return a number days in month
+    #[allow(unused)]
     fn num_days_in_month(year: i32, month: u32) -> u32 {
         fn is_leap_year(year: i32) -> bool {
             (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
@@ -377,5 +413,17 @@ impl Staking {
             12 => 31,
             _ => 30,
         }
+    }
+
+    // Return the last day of month
+    fn last_day_of_month(year: i32, month: u32) -> Option<u32> {
+        let next_month = if month == 12 {
+            NaiveDate::from_ymd_opt(year + 1, 1, 1)
+        } else {
+            NaiveDate::from_ymd_opt(year, month + 1, 1)
+        }?;
+
+        let last_day = next_month - Duration::days(1);
+        Some(last_day.day())
     }
 }

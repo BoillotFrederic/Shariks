@@ -12,9 +12,13 @@ use sqlx::{Error, PgPool};
 // Crate
 use crate::blockchain;
 use crate::encryption::*;
+use crate::log::*;
 use crate::utils::*;
 use crate::vault;
 use crate::vault::*;
+
+// Types
+type DynError = Box<dyn std::error::Error>;
 
 /// Defines the format of a wallet owner
 #[derive(Serialize, Deserialize, Debug)]
@@ -49,10 +53,16 @@ impl Wallet {
         exempt_fee: bool,
         staking_available: bool,
         pg_pool: &PgPool,
-    ) -> Wallet {
+    ) -> Result<Wallet, DynError> {
         // Keypair generate
         let (phrase, signing_key, verifying_key, dh_secret, dh_public) =
-            Encryption::generate_full_keypair_from_mnemonic(passphrase);
+            match Encryption::generate_full_keypair_from_mnemonic(passphrase) {
+                Ok(keys) => keys,
+                Err(e) => {
+                    Log::error("Wallet", "new", "Failed to generate keys", &e.to_string());
+                    return Err(e);
+                }
+            };
 
         let private_key_bytes = signing_key.to_bytes();
         let public_key_bytes = verifying_key.to_bytes();
@@ -84,7 +94,7 @@ impl Wallet {
             match updated {
                 Ok(row) => row.referrer_count <= 100,
                 Err(e) => {
-                    eprintln!("Error : update referrer_count: {}", e);
+                    Log::error("Wallet", "new", "Update referrer_count failed", e);
                     false
                 }
             }
@@ -107,7 +117,7 @@ impl Wallet {
                 Ok(()) => {
                     println!("Secret : {} has been set", owner_wallet_name);
                 }
-                Err(err) => eprintln!("Error : Vault : {}", err),
+                Err(e) => Log::error("Wallet", "new", "Write secret failed", e),
             }
 
             Utils::write_to_file(&format!("owners\\{}", owner_wallet_name), &address).unwrap();
@@ -138,11 +148,11 @@ impl Wallet {
         .execute(pg_pool), 30)
         .await
         {
-            eprintln!("Error : insert wallet : {}", e);
+            Log::error("Wallet", "new", "Insert wallet failed", e);
         }
 
         // Return the wallet
-        wallet
+        Ok(wallet)
     }
 
     /// Find a wallet

@@ -5,8 +5,7 @@
 //! enforces transaction validation rules, and handles block addition.
 
 // Dependencies
-#[allow(unused)]
-use futures::StreamExt;
+//use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json;
 use sha2::{Digest, Sha256};
@@ -17,6 +16,7 @@ use uuid::Uuid;
 use crate::Utils;
 use crate::encryption::*;
 use crate::ledger::*;
+use crate::log::*;
 use crate::wallet::*;
 
 /// Defines the format of a fee rule
@@ -96,7 +96,15 @@ impl Block {
         block: &Block,
         query_sync: &mut QuerySync<'_, Postgres>,
     ) -> Result<(), sqlx::Error> {
-        let block_json = serde_json::to_value(&block).unwrap();
+        let block_json = serde_json::to_value(&block).map_err(|e| {
+            Log::error(
+                "Blockchain::Blocks",
+                "save_to_db",
+                "Block serialization",
+                e.to_string(),
+            );
+            sqlx::Error::Protocol(e.to_string().into())
+        })?;
 
         Utils::with_timeout(
             sqlx::query!(
@@ -151,41 +159,75 @@ impl Transaction {
     ) -> Option<Transaction> {
         // Error : prefix
         if !Wallet::check_prefix(sender) {
-            println!("Error : invalid sender address (must start with 'SRKS_')");
+            Log::error_msg(
+                "Blockchain::Transaction",
+                "create",
+                "Sender address must start with 'SRKS_",
+            );
             return None;
         }
         if !Wallet::check_prefix(recipient) {
-            println!("Error : invalid recipient address (must start with 'SRKS_')");
+            Log::error_msg(
+                "Blockchain::Transaction",
+                "create",
+                "Recipient address must start with 'SRKS_",
+            );
             return None;
         }
 
         // Error : sender is recipient
         if sender == recipient {
-            println!("Error : The sender must not be the recipient");
+            Log::error_msg(
+                "Blockchain::Transaction",
+                "create",
+                "The sender must not be the recipient",
+            );
             return None;
         }
 
         // Get wallets
-        let sender_wallet = Wallet::find(&pg_pool, sender).await.unwrap();
-        let recipient_wallet = Wallet::find(&pg_pool, recipient).await.unwrap();
+        let sender_wallet = match Wallet::find(&pg_pool, sender).await {
+            Ok(wallet) => wallet,
+            Err(e) => {
+                Log::error("Blockchain::Transaction", "create", "Find sender error", e);
+                return None;
+            }
+        };
+
+        let recipient_wallet = match Wallet::find(&pg_pool, recipient).await {
+            Ok(wallet) => wallet,
+            Err(e) => {
+                Log::error(
+                    "Blockchain::Transaction",
+                    "create",
+                    "Find recipient error",
+                    e,
+                );
+                return None;
+            }
+        };
 
         // Error : wallet not found
         if sender_wallet.address.is_empty() {
-            println!("Error : sender ({}) not found", sender);
+            Log::error_msg("Blockchain::Transaction", "create", "Sender not found");
             return None;
         }
         if recipient_wallet.address.is_empty() {
-            println!("Error : recipient ({}) not found", recipient);
+            Log::error_msg("Blockchain::Transaction", "create", "Recipient not found");
             return None;
         }
 
         // Invalid amount
         if amount == 0 {
-            println!("Error : Invalid amount: cannot be zero");
+            Log::error_msg("Blockchain::Transaction", "create", "Amount cannot be zero");
             return None;
         }
         if amount < MIN_AMOUNT {
-            println!("Error : Amount too low: minimum required is {}", MIN_AMOUNT);
+            Log::error_msg(
+                "Blockchain::Transaction",
+                "create",
+                &format!("Amount minimum required is {}", MIN_AMOUNT),
+            );
             return None;
         }
 
@@ -194,15 +236,24 @@ impl Transaction {
         let message = format!("{}:{}:{}:{}", sender, recipient, amount, memo);
 
         if !Encryption::verify_transaction(public_key, &message, signature) {
-            println!("Error : invalid signature");
+            Log::error_msg("Blockchain::Transaction", "create", "Invalid signature");
             return None;
         }
 
         // Check if bonus fee for referrer
         let sender_referrer_wallet =
-            Wallet::find(&pg_pool, sender_wallet.referrer.as_deref().unwrap_or(""))
-                .await
-                .unwrap();
+            match Wallet::find(&pg_pool, sender_wallet.referrer.as_deref().unwrap_or("")).await {
+                Ok(wallet) => wallet,
+                Err(e) => {
+                    Log::error(
+                        "Blockchain::Transaction",
+                        "create",
+                        "Find sender referrer error",
+                        e,
+                    );
+                    return None;
+                }
+            };
 
         let inactive_referrer = Wallet::is_inactive(sender_referrer_wallet.clone());
         let bonus_referrer =
@@ -249,22 +300,19 @@ impl Transaction {
             let balance = match Ledger::get_balance(pg_pool, sender).await {
                 Ok(b) => b,
                 Err(e) => {
-                    eprintln!("Error getting balance for {}: {}", sender, e);
+                    Log::error("Blockchain::Transaction", "create", "Get balance error", e);
                     return None;
                 }
             };
             if balance < total {
-                println!(
-                    "Error : not enough tokens. current number of tokens {} : {}, required : {}",
-                    sender,
-                    super::to_srks(balance),
-                    super::to_srks(total)
+                Log::error_msg(
+                    "Blockchain::Transaction",
+                    "create",
+                    &format!("Not enough tokens, required is {}", super::to_srks(total)),
                 );
                 return None;
             }
         }
-
-        println!("The transaction was successfully completed");
 
         Some(Transaction {
             id: Uuid::new_v4(),
@@ -333,10 +381,10 @@ impl Transaction {
         fee: u64,
         fee_rule: FeeRule,
         referrer_wallet: String,
-    ) -> Vec<(String, u64)> {
+    ) -> Result<Vec<(String, u64)>, std::io::Error> {
         // Stop if no fee
         if fee == 0 {
-            return vec![];
+            return Ok(vec![]);
         }
 
         // Distribution
@@ -350,9 +398,35 @@ impl Transaction {
         let shares = Self::split_fee_exact(fee, &percentages);
 
         // Get wallets
-        let public_sale_address = Utils::read_from_file("owners/PUBLIC_SALE").unwrap();
-        let founder_address = Utils::read_from_file("owners/FOUNDER").unwrap();
-        let staking_address = Utils::read_from_file("owners/STAKING").unwrap();
+        let public_sale_address = Utils::read_from_file("owners/PUBLIC_SALE").map_err(|e| {
+            Log::error(
+                "Blockchain::Blocks",
+                "fee_distributions",
+                "PUBLIC_SALE",
+                &e.to_string(),
+            );
+            e
+        })?;
+
+        let founder_address = Utils::read_from_file("owners/FOUNDER").map_err(|e| {
+            Log::error(
+                "Blockchain::Blocks",
+                "fee_distributions",
+                "FOUNDER",
+                &e.to_string(),
+            );
+            e
+        })?;
+
+        let staking_address = Utils::read_from_file("owners/STAKING").map_err(|e| {
+            Log::error(
+                "Blockchain::Blocks",
+                "fee_distributions",
+                "STAKING",
+                &e.to_string(),
+            );
+            e
+        })?;
 
         let mut result = vec![
             (founder_address.clone(), shares[0]),
@@ -367,7 +441,7 @@ impl Transaction {
             result.push((founder_address, shares[3]));
         }
 
-        result
+        Ok(result)
     }
 
     /// Fee adjustment so that no tokens or nano tokens are lost
@@ -396,15 +470,23 @@ impl Transaction {
                 {
                     plaintext
                 } else {
-                    eprintln!("Error : decrypt");
+                    Log::error_msg("Blockchain::Transaction", "decrypt_memo", "Decrypt failed");
                     "".to_string()
                 }
             } else {
-                eprintln!("Error : convert key");
+                Log::error_msg(
+                    "Blockchain::Transaction",
+                    "decrypt_memo",
+                    "Convert key failed",
+                );
                 "".to_string()
             }
         } else {
-            eprintln!("Error : separator");
+            Log::error_msg(
+                "Blockchain::Transaction",
+                "decrypt_memo",
+                "Separator not found",
+            );
             "".to_string()
         }
     }
@@ -471,7 +553,15 @@ pub async fn load_blocks_from_db(pg_pool: &PgPool) -> Result<Vec<Block>, sqlx::E
 
     let mut blocks = Vec::new();
     for row in rows {
-        let block: Block = serde_json::from_value(row.raw_json).unwrap();
+        let block: Block = serde_json::from_value(row.raw_json).map_err(|e| {
+            Log::error(
+                "Blockchain::Blocks",
+                "load_blocks_from_db",
+                "Deserialize block failed",
+                e.to_string(),
+            );
+            sqlx::Error::Protocol(e.to_string().into())
+        })?;
         blocks.push(block);
     }
 
@@ -580,18 +670,30 @@ pub async fn verify_and_resync_ledger(pg_pool: &PgPool) -> Result<(), Box<dyn st
         let expected: i64 = r.get("expected");
 
         if balance != expected {
-            println!(
-                "Desynchronization : {} → real = {}, expected = {}",
-                address, balance, expected
+            Log::error_msg(
+                "Blockchain",
+                "verify_and_resync_ledger",
+                &format!(
+                    "Desynchronization : {} → real = {}, expected = {}",
+                    address, balance, expected
+                ),
             );
             desync_count += 1;
         }
     }
 
     if desync_count == 0 {
-        println!("Ledger perfectly synchronized !");
+        Log::info_msg(
+            "Blockchain",
+            "verify_and_resync_ledger",
+            "Ledger perfectly synchronized",
+        );
     } else {
-        println!("{} desynchronizations detected", desync_count);
+        Log::error_msg(
+            "Blockchain",
+            "verify_and_resync_ledger",
+            &format!("{} desynchronizations detected", desync_count),
+        );
     }
 
     // Fix all desynchronizations

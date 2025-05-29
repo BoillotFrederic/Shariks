@@ -16,6 +16,7 @@ mod blockchain;
 mod encryption;
 mod genesis;
 mod ledger;
+mod log;
 mod staking;
 mod utils;
 mod vault;
@@ -27,6 +28,7 @@ use blockchain::*;
 use encryption::*;
 use genesis::*;
 use ledger::*;
+use log::*;
 use sqlx::PgPool;
 use staking::*;
 use std::io;
@@ -37,10 +39,13 @@ use wallet::*;
 // Main
 #[tokio::main]
 async fn main() -> Result<(), sqlx::Error> {
-    println!("Initialization start");
+    // Start
+    Log::info_msg("Main", "main", "Initialization start");
 
     // Read dotenv
-    dotenvy::dotenv().ok();
+    if let Err(e) = dotenvy::dotenv() {
+        Log::warn("Main", "main", "Failed to load .env file", e);
+    }
 
     // Connect to database
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -50,7 +55,7 @@ async fn main() -> Result<(), sqlx::Error> {
     if blockchain::is_empty(&pg_pool).await? {
         match Genesis::start(&pg_pool).await {
             Ok(()) => {}
-            Err(e) => println!("Error : {}", e),
+            Err(e) => Log::error("Main", "main", "Genesis failed", e),
         };
     }
 
@@ -74,12 +79,15 @@ async fn main() -> Result<(), sqlx::Error> {
 
         let mut choice = String::new();
 
-        io::stdin()
-            .read_line(&mut choice)
-            .expect("Error : read line");
+        if let Err(e) = io::stdin().read_line(&mut choice) {
+            Log::error("Main", "main", "Failed to read from stdin", e.to_string());
+            return Err(e.into());
+        }
+
         match choice.trim() {
             // CLI - add transaction
             "1" => {
+                Log::info_msg("Main", "main", "Create a new transaction");
                 let sender = Utils::prompt("Sender :");
                 let recipient = Utils::prompt("Recipient :");
                 let amount: u64 = blockchain::to_nanosrks(
@@ -96,7 +104,7 @@ async fn main() -> Result<(), sqlx::Error> {
                 let recipient_dh_public = match recipient_dh_public_opt {
                     Some(key) => key,
                     None => {
-                        eprintln!("Erreur : destinataire introuvable ou pas de dh_public.");
+                        Log::error_msg("Main", "main", "Get DH public failed");
                         return Ok(());
                     }
                 };
@@ -105,7 +113,7 @@ async fn main() -> Result<(), sqlx::Error> {
                 {
                     Some(secret) => secret,
                     None => {
-                        eprintln!("Error : dh_secret invalid");
+                        Log::error_msg("Main", "main", "Convert DH secret failed");
                         return Ok(());
                     }
                 };
@@ -164,23 +172,28 @@ async fn main() -> Result<(), sqlx::Error> {
                     match result {
                         Ok(_) => {
                             query_sync.commit().await?;
+
+                            Log::info_msg(
+                                "Main",
+                                "main",
+                                "The transaction was successfully completed",
+                            );
                         }
                         Err(_e) => {
                             query_sync.rollback().await.ok();
                         }
                     }
-
-                    println!("\nTransaction : {:?}", block);
                 }
             }
             // CLI - create a new wallet
             "2" => {
+                Log::info_msg("Main", "main", "Create a new wallet");
                 let referrer = Utils::prompt("Godfather :");
                 let passphrase = Utils::prompt_secret("Passphrase :");
                 let found = Wallet::exists(&pg_pool, &referrer).await.unwrap_or(false);
 
                 if found || referrer.is_empty() {
-                    Wallet::new(
+                    match Wallet::new(
                         found,
                         "",
                         &referrer.trim(),
@@ -189,13 +202,21 @@ async fn main() -> Result<(), sqlx::Error> {
                         true,
                         &pg_pool,
                     )
-                    .await;
+                    .await
+                    {
+                        Ok(w) => w,
+                        Err(e) => {
+                            Log::error("Main", "main", "Failed to create wallet", &e.to_string());
+                            return Err(sqlx::Error::Protocol(e.to_string().into()));
+                        }
+                    };
                 } else {
-                    println!("Error : the sponsor {} is not a known wallet", referrer);
+                    Log::error_msg("Main", "main", "Referrer wallet not found");
                 }
             }
             // CLI - print all blocks
             "3" => {
+                Log::info_msg("Main", "main", "Print all blocks");
                 let blocks = blockchain::load_blocks_from_db(&pg_pool).await?;
                 for block in &blocks {
                     println!("\nBlock n°{} :", block.index);
@@ -204,14 +225,17 @@ async fn main() -> Result<(), sqlx::Error> {
             }
             // CLI - view balances
             "4" => {
+                Log::info_msg("Main", "main", "View balances");
                 Ledger::view_balances(&pg_pool).await?;
             }
             // CLI - check total supply
             "5" => {
+                Log::info_msg("Main", "main", "Check total supply");
                 Ledger::check_total_supply(&pg_pool, 100_000_000 * NANOSRKS_PER_SRKS).await?;
             }
-            // CLI - View keypair with mnemonic
+            // CLI - view keys with mnemonic
             "6" => {
+                Log::info_msg("Main", "main", "view keys with mnemonic");
                 let mnemonic = Utils::prompt("Mnemonic :");
                 let passphrase = Utils::prompt_secret("Passphrase :");
                 match Encryption::restore_full_keypair_from_mnemonic(
@@ -227,17 +251,19 @@ async fn main() -> Result<(), sqlx::Error> {
                         println!("dh public : {}", hex::encode(dh_public.to_bytes()));
                         println!("dh secret : {}", hex::encode(dh_secret.to_bytes()));
                     }
-                    Err(err) => eprintln!("Error : failed to restore keypair: {}", err),
+                    Err(e) => Log::error("Main", "main", "Key restoration failed", e),
                 }
             }
             // CLI - print all wallets
             "7" => {
+                Log::info_msg("Main", "main", "Print all wallets");
                 if let Err(e) = Wallet::print_all(&pg_pool).await {
-                    eprintln!("Error : print wallets : {}", e);
+                    Log::error("Main", "main", "Print wallets failed", e);
                 }
             }
             // CLI - Decrypt a memo
             "8" => {
+                Log::info_msg("Main", "main", "Decrypt a memo");
                 let memo = Utils::prompt("Memo : ");
                 let dh_public = Utils::prompt("DH public : ");
                 let dh_secret = Utils::prompt_secret("DH secret : ");
@@ -247,34 +273,51 @@ async fn main() -> Result<(), sqlx::Error> {
                 println!("{}", memo_decrypted);
             }
             // CLI - fake insert for token distribution test (coming soon)
-            "9" => {}
+            "9" => {
+                Log::info_msg("Main", "main", "fake insert for token distribution test");
+            }
 
             // CLI - distribute staking wallet for the last month
             "10" => {
+                Log::info_msg("Main", "main", "Distribute staking wallet");
                 let pg_pool_clone = pg_pool.clone();
                 tokio::task::spawn_blocking(move || {
-                    let rt = tokio::runtime::Runtime::new().unwrap();
+                    let rt = match tokio::runtime::Runtime::new() {
+                        Ok(runtime) => runtime,
+                        Err(e) => {
+                            Log::error("Main", "main", "Failed to create runtime", e);
+                            return;
+                        }
+                    };
                     if let Err(e) = rt.block_on(Staking::execute_monthly_staking_distribution(
                         &pg_pool_clone,
                     )) {
-                        eprintln!("Error : staking : {}", e);
+                        Log::error("Main", "main", "Distribute staking wallet failed", e);
                     }
                 });
             }
             // CLI - check and fix ledger with blockchain reading
             "11" => {
+                Log::info_msg("Main", "main", "Check and fix Ledger");
                 let pg_pool_clone = pg_pool.clone();
                 tokio::task::spawn_blocking(move || {
-                    let rt = tokio::runtime::Runtime::new().unwrap();
+                    let rt = match tokio::runtime::Runtime::new() {
+                        Ok(runtime) => runtime,
+                        Err(e) => {
+                            Log::error("Main", "main", "Failed to create runtime", e);
+                            return;
+                        }
+                    };
                     if let Err(e) =
                         rt.block_on(blockchain::verify_and_resync_ledger(&pg_pool_clone))
                     {
-                        eprintln!("Error : check and fix ledger : {}", e);
+                        Log::error("Main", "main", "Check and fix ledger failed", e);
                     }
                 });
             }
             // CLI - write a secret wallet
             "12" => {
+                Log::info_msg("Main", "main", "Write a secret wallet");
                 let wallet_secret = vault::WalletSecret {
                     mnemonic: "mnemonic test".to_string(),
                     passphrase: "passphrase test".to_string(),
@@ -287,11 +330,12 @@ async fn main() -> Result<(), sqlx::Error> {
                     Ok(()) => {
                         println!("OK");
                     }
-                    Err(e) => println!("{}", e),
+                    Err(e) => Log::error("Main", "main", "Write secret failed", e),
                 };
             }
             // CLI - read a secret wallet
             "13" => {
+                Log::info_msg("Main", "main", "Read a secret wallet");
                 let name = Utils::prompt("Name : ");
                 match VaultService::get_owner_secret(&name).await {
                     Ok(secret) => {
@@ -302,16 +346,16 @@ async fn main() -> Result<(), sqlx::Error> {
                         println!("{}", secret.dh_public);
                         println!("{}", secret.dh_secret);
                     }
-                    Err(e) => println!("{}", e),
+                    Err(e) => Log::error("Main", "main", "Read secret failed", e),
                 };
             }
             // CLI - quit
             "14" => {
-                println!("Bye !");
+                Log::info_msg("Main", "main", "Quit");
                 break;
             }
             // Invalid choise
-            _ => println!("Error : invalid choise"),
+            _ => Log::error_msg("Main", "main", "Invalid choise"),
         }
     }
 

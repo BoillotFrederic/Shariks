@@ -19,7 +19,11 @@ use x25519_dalek::{PublicKey as XPublicKey, StaticSecret};
 
 // Crates
 use crate::Wallet;
+use crate::log::*;
 use crate::utils::*;
+
+// Types
+type DynError = Box<dyn std::error::Error>;
 
 // Encryption
 // ----------
@@ -37,14 +41,29 @@ impl Encryption {
             ("".to_string(), [0u8; 24])
         } else {
             let shared_secret = sender_secret.diffie_hellman(recipient_public);
-            let cipher = XChaCha20Poly1305::new_from_slice(shared_secret.as_bytes()).unwrap();
+            let cipher = match XChaCha20Poly1305::new_from_slice(shared_secret.as_bytes()) {
+                Ok(c) => c,
+                Err(e) => {
+                    Log::error(
+                        "Encryption",
+                        "encrypt_message",
+                        "Invalid key size for cipher",
+                        e,
+                    );
+                    return ("".to_string(), [0u8; 24]);
+                }
+            };
 
             let mut nonce = [0u8; 24];
             rand::rngs::OsRng.fill_bytes(&mut nonce);
 
-            let ciphertext = cipher
-                .encrypt(&XNonce::from(nonce), message.as_bytes())
-                .unwrap();
+            let ciphertext = match cipher.encrypt(&XNonce::from(nonce), message.as_bytes()) {
+                Ok(data) => data,
+                Err(e) => {
+                    Log::error("Encryption", "encrypt_message", "Encryption failed", e);
+                    return ("".to_string(), [0u8; 24]);
+                }
+            };
 
             (general_purpose::STANDARD.encode(ciphertext), nonce)
         }
@@ -58,36 +77,64 @@ impl Encryption {
         nonce: [u8; 24],
     ) -> Option<String> {
         let shared_secret = dh_secret.diffie_hellman(dh_public);
-        let cipher = XChaCha20Poly1305::new_from_slice(shared_secret.as_bytes()).unwrap();
+        let cipher = match XChaCha20Poly1305::new_from_slice(shared_secret.as_bytes()) {
+            Ok(c) => c,
+            Err(e) => {
+                Log::error(
+                    "Encryption",
+                    "decrypt_message",
+                    "Invalid key size for cipher",
+                    e,
+                );
+                return None;
+            }
+        };
 
-        let ciphertext = general_purpose::STANDARD.decode(ciphertext_b64).ok()?;
-        let decrypted = cipher
-            .decrypt(&XNonce::from(nonce), ciphertext.as_ref())
-            .ok()?;
+        let ciphertext = match general_purpose::STANDARD.decode(ciphertext_b64) {
+            Ok(data) => data,
+            Err(e) => {
+                Log::error("Encryption", "decrypt_message", "Invalid b64", e);
+                return None;
+            }
+        };
 
-        String::from_utf8(decrypted).ok()
+        let decrypted = match cipher.decrypt(&XNonce::from(nonce), ciphertext.as_ref()) {
+            Ok(data) => data,
+            Err(e) => {
+                Log::error("Encryption", "decrypt_message", "invalid key or nonce", e);
+                return None;
+            }
+        };
+
+        match String::from_utf8(decrypted) {
+            Ok(text) => Some(text),
+            Err(e) => {
+                Log::error("Encryption", "decrypt_message", "invalid UTF-8", e);
+                return None;
+            }
+        }
     }
 
     /// Generates a mnemonic and a public key associated with a private key, encapsulates
     /// in the encryption a secret DH key and a public DH key
     pub fn generate_full_keypair_from_mnemonic(
         passphrase: &str,
-    ) -> (String, SigningKey, VerifyingKey, StaticSecret, XPublicKey) {
-        let mnemonic = Mnemonic::generate(12).unwrap();
+    ) -> Result<(String, SigningKey, VerifyingKey, StaticSecret, XPublicKey), DynError> {
+        let mnemonic = Mnemonic::generate(12)?;
         let phrase = mnemonic.to_string();
         let seed = mnemonic.to_seed(passphrase);
 
         // Ed25519 keypair
-        let seed_ed: &[u8; 32] = &seed[..32].try_into().expect("Error : seed < 32 bytes");
+        let seed_ed: &[u8; 32] = &seed[..32].try_into().map_err(|_| "seed < 32 bytes")?;
         let signing_key = SigningKey::from_bytes(seed_ed);
         let verifying_key = signing_key.verifying_key();
 
         // X25519 keypair for memo encryption
-        let seed_dh: &[u8; 32] = &seed[32..64].try_into().expect("Error : seed < 64 bytes");
+        let seed_dh: &[u8; 32] = &seed[32..64].try_into().map_err(|_| "seed < 64 bytes")?;
         let dh_secret = StaticSecret::from(*seed_dh);
         let dh_public = XPublicKey::from(&dh_secret);
 
-        (phrase, signing_key, verifying_key, dh_secret, dh_public)
+        Ok((phrase, signing_key, verifying_key, dh_secret, dh_public))
     }
 
     /// Remove the public key, private key, DU secret key and public DH key using the mnemonic
@@ -97,16 +144,28 @@ impl Encryption {
         passphrase: &str,
         pool: &PgPool,
     ) -> Result<(SigningKey, VerifyingKey, StaticSecret, XPublicKey), String> {
-        let mnemonic = Mnemonic::parse(phrase).expect("Error : invalid mnemonic phrase");
+        let mnemonic = Mnemonic::parse(phrase).map_err(|e| {
+            Log::error(
+                "Encryption",
+                "restore_wallet",
+                "Invalid mnemonic phrase",
+                e.to_string(),
+            );
+            "Invalid mnemonic phrase"
+        })?;
         let seed = mnemonic.to_seed(passphrase);
 
         // Ed25519 keypair
-        let seed_ed: [u8; 32] = seed[..32].try_into().expect("Error : seed < 32 bytes");
+        let seed_ed: [u8; 32] = seed[..32]
+            .try_into()
+            .map_err(|_| "Seed slice too short for Ed25519 key")?;
         let signing_key = SigningKey::from_bytes(&seed_ed);
         let verifying_key = signing_key.verifying_key();
 
         // X25519 keypair for memo encryption
-        let seed_dh: [u8; 32] = seed[32..64].try_into().expect("Error : seed < 64 bytes");
+        let seed_dh: [u8; 32] = seed[32..64]
+            .try_into()
+            .map_err(|_| "Seed slice too short for X25519 key")?;
         let dh_secret = StaticSecret::from(seed_dh);
         let dh_public = XPublicKey::from(&dh_secret);
 

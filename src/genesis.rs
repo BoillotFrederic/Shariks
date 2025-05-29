@@ -32,6 +32,7 @@ use crate::blockchain;
 use crate::blockchain::*;
 use crate::encryption::*;
 use crate::ledger::*;
+use crate::log::*;
 use crate::vault::*;
 use crate::wallet::*;
 
@@ -45,7 +46,8 @@ impl Genesis {
     pub async fn start(pg_pool: &PgPool) -> Result<(), Box<dyn std::error::Error>> {
         // Public sale
         let genesis_passphrase = env::var("GENESIS_PASSPHRASE")?;
-        let public_sale_wallet = Wallet::new(
+
+        let public_sale_wallet = match Wallet::new(
             false,
             &"PUBLIC_SALE".to_string(),
             "",
@@ -54,7 +56,15 @@ impl Genesis {
             false,
             &pg_pool,
         )
-        .await;
+        .await
+        {
+            Ok(w) => w,
+            Err(e) => {
+                Log::error("Genesis", "start", "Failed to create wallet", e.to_string());
+                return Err(e);
+            }
+        };
+
         let memo = "GENESIS";
 
         // Transaction GENESIS
@@ -133,7 +143,7 @@ impl Genesis {
         let mut wallet_addresses: Vec<String> = Vec::new();
 
         for wallet_name in wallet_names.iter() {
-            let wallet = Wallet::new(
+            let wallet = match Wallet::new(
                 false,
                 wallet_name,
                 "",
@@ -142,7 +152,20 @@ impl Genesis {
                 false,
                 &pg_pool,
             )
-            .await;
+            .await
+            {
+                Ok(w) => w,
+                Err(e) => {
+                    Log::error(
+                        "Genesis",
+                        "distribute",
+                        "Failed to create wallet",
+                        e.to_string(),
+                    );
+                    return Err(e);
+                }
+            };
+
             wallet_addresses.push(wallet.address.clone());
         }
 

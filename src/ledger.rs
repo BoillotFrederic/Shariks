@@ -11,6 +11,7 @@ use sqlx::{Error, PgPool, Postgres, Transaction as QuerySync};
 use crate::Utils;
 use crate::blockchain;
 use crate::blockchain::*;
+use crate::log::*;
 
 // Ledger
 // ------
@@ -70,11 +71,24 @@ impl Ledger {
         .await?;
 
         // Fee distributions
-        for (addr, amount) in blockchain::Transaction::fee_distributions(
+        let distributions = match blockchain::Transaction::fee_distributions(
             tx.fee,
             tx.fee_rule.clone(),
             tx.referrer.clone(),
         ) {
+            Ok(data) => data,
+            Err(e) => {
+                Log::error(
+                    "Blockchain::Transaction",
+                    "flush_block",
+                    "Fee distributions failed",
+                    e.to_string(),
+                );
+                return Err(sqlx::Error::Protocol(e.to_string().into()));
+            }
+        };
+
+        for (addr, amount) in distributions {
             Utils::with_timeout(
                 sqlx::query!(
                     "INSERT INTO core.wallet_balances (address, balance)
@@ -107,12 +121,18 @@ impl Ledger {
         let total_u64 = row.total.unwrap_or(0).max(0) as u64;
 
         if total_u64 == expected_total {
-            println!("Total supply is correct : {} SRKS", to_srks(total_u64));
+            Log::info_msg("Ledger", "check_total_supply", "Total supply is correct");
             Ok(true)
         } else {
-            println!("Error : total supply incorrect");
-            println!("Current : {} SRKS", to_srks(total_u64));
-            println!("Expected : {} SRKS", to_srks(expected_total));
+            Log::error_msg(
+                "Ledger",
+                "check_total_supply",
+                &format!(
+                    "Total supply is incorrect, Current: {} SRKS, Expected: {} SRKS",
+                    to_srks(total_u64),
+                    to_srks(expected_total)
+                ),
+            );
             Ok(false)
         }
     }
