@@ -48,7 +48,10 @@ async fn main() -> Result<(), sqlx::Error> {
     }
 
     // Connect to database
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|e| {
+        Log::warn("Main", "main", "DATABASE_URL not found, using fallback", e);
+        "".to_string()
+    });
     let pg_pool = PgPool::connect(&database_url).await?;
 
     // Create first transactions
@@ -105,7 +108,7 @@ async fn main() -> Result<(), sqlx::Error> {
                     Some(key) => key,
                     None => {
                         Log::error_msg("Main", "main", "Get DH public failed");
-                        return Ok(());
+                        continue;
                     }
                 };
 
@@ -114,7 +117,7 @@ async fn main() -> Result<(), sqlx::Error> {
                     Some(secret) => secret,
                     None => {
                         Log::error_msg("Main", "main", "Convert DH secret failed");
-                        return Ok(());
+                        continue;
                     }
                 };
                 let memo_input = Utils::prompt("Memo :");
@@ -181,6 +184,7 @@ async fn main() -> Result<(), sqlx::Error> {
                         }
                         Err(_e) => {
                             query_sync.rollback().await.ok();
+                            continue;
                         }
                     }
                 }
@@ -207,11 +211,12 @@ async fn main() -> Result<(), sqlx::Error> {
                         Ok(w) => w,
                         Err(e) => {
                             Log::error("Main", "main", "Failed to create wallet", &e.to_string());
-                            return Err(sqlx::Error::Protocol(e.to_string().into()));
+                            continue;
                         }
                     };
                 } else {
                     Log::error_msg("Main", "main", "Referrer wallet not found");
+                    continue;
                 }
             }
             // CLI - print all blocks
@@ -251,7 +256,10 @@ async fn main() -> Result<(), sqlx::Error> {
                         println!("dh public : {}", hex::encode(dh_public.to_bytes()));
                         println!("dh secret : {}", hex::encode(dh_secret.to_bytes()));
                     }
-                    Err(e) => Log::error("Main", "main", "Key restoration failed", e),
+                    Err(e) => {
+                        Log::error("Main", "main", "Key restoration failed", e);
+                        continue;
+                    }
                 }
             }
             // CLI - print all wallets
@@ -259,6 +267,7 @@ async fn main() -> Result<(), sqlx::Error> {
                 Log::info_msg("Main", "main", "Print all wallets");
                 if let Err(e) = Wallet::print_all(&pg_pool).await {
                     Log::error("Main", "main", "Print wallets failed", e);
+                    continue;
                 }
             }
             // CLI - Decrypt a memo
@@ -275,6 +284,7 @@ async fn main() -> Result<(), sqlx::Error> {
             // CLI - fake insert for token distribution test (coming soon)
             "9" => {
                 Log::info_msg("Main", "main", "fake insert for token distribution test");
+                continue;
             }
 
             // CLI - distribute staking wallet for the last month
@@ -289,10 +299,20 @@ async fn main() -> Result<(), sqlx::Error> {
                             return;
                         }
                     };
-                    if let Err(e) = rt.block_on(Staking::execute_monthly_staking_distribution(
+                    let result = rt.block_on(Staking::execute_monthly_staking_distribution(
                         &pg_pool_clone,
-                    )) {
-                        Log::error("Main", "main", "Distribute staking wallet failed", e);
+                    ));
+
+                    match result {
+                        Ok(_) => Log::info_msg(
+                            "Main",
+                            "main",
+                            "Staking distribution finished successfully",
+                        ),
+                        Err(e) => {
+                            Log::error("Main", "main", "Staking distribution failed", e);
+                            return;
+                        }
                     }
                 });
             }
@@ -308,10 +328,14 @@ async fn main() -> Result<(), sqlx::Error> {
                             return;
                         }
                     };
-                    if let Err(e) =
-                        rt.block_on(blockchain::verify_and_resync_ledger(&pg_pool_clone))
-                    {
-                        Log::error("Main", "main", "Check and fix ledger failed", e);
+
+                    let result = rt.block_on(blockchain::verify_and_resync_ledger(&pg_pool_clone));
+                    match result {
+                        Ok(_) => Log::info_msg("Main", "main", "Check and fix Ledger finished"),
+                        Err(e) => {
+                            Log::error("Main", "main", "Check and fix ledger failed", e);
+                            return;
+                        }
                     }
                 });
             }
@@ -330,7 +354,10 @@ async fn main() -> Result<(), sqlx::Error> {
                     Ok(()) => {
                         println!("OK");
                     }
-                    Err(e) => Log::error("Main", "main", "Write secret failed", e),
+                    Err(e) => {
+                        Log::error("Main", "main", "Write secret failed", e);
+                        continue;
+                    }
                 };
             }
             // CLI - read a secret wallet
@@ -346,7 +373,10 @@ async fn main() -> Result<(), sqlx::Error> {
                         println!("{}", secret.dh_public);
                         println!("{}", secret.dh_secret);
                     }
-                    Err(e) => Log::error("Main", "main", "Read secret failed", e),
+                    Err(e) => {
+                        Log::error("Main", "main", "Read secret failed", e);
+                        continue;
+                    }
                 };
             }
             // CLI - quit
@@ -355,7 +385,10 @@ async fn main() -> Result<(), sqlx::Error> {
                 break;
             }
             // Invalid choise
-            _ => Log::error_msg("Main", "main", "Invalid choise"),
+            _ => {
+                Log::error_msg("Main", "main", "Invalid choise");
+                continue;
+            }
         }
     }
 

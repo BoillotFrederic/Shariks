@@ -79,11 +79,11 @@ impl Wallet {
             let updated = Utils::with_timeout(
                 sqlx::query!(
                     r#"
-                UPDATE core.wallets
-                SET referrer_count = referrer_count + 1
-                WHERE address = $1
-                RETURNING referrer_count
-                "#,
+                    UPDATE core.wallets
+                    SET referrer_count = referrer_count + 1
+                    WHERE address = $1
+                    RETURNING referrer_count
+                    "#,
                     referrer
                 )
                 .fetch_one(pg_pool),
@@ -120,7 +120,17 @@ impl Wallet {
                 Err(e) => Log::error("Wallet", "new", "Write secret failed", e),
             }
 
-            Utils::write_to_file(&format!("owners\\{}", owner_wallet_name), &address).unwrap();
+            Utils::write_to_file(&format!("owners\\{}", owner_wallet_name), &address).map_err(
+                |e| {
+                    Log::error(
+                        "Wallet",
+                        "new",
+                        "Failed to write wallet address to file",
+                        &e.to_string(),
+                    );
+                    e
+                },
+            )?;
         }
 
         // The wallet struct

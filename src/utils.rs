@@ -14,6 +14,9 @@ use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time;
 
+// Crates
+use crate::log::*;
+
 // Utils
 // -----
 
@@ -30,11 +33,12 @@ impl Utils {
     /// Simple prompt
     pub fn prompt(text: &str) -> String {
         println!("{}", text);
-        let mut _prompt = String::new();
-        io::stdin()
-            .read_line(&mut _prompt)
-            .expect("Error : read line");
-        _prompt.trim().to_string()
+        let mut buffer = String::new();
+        if let Err(e) = std::io::stdin().read_line(&mut buffer) {
+            Log::error("Utils", "prompt", "Failed to read user input", e);
+            return String::new();
+        }
+        buffer.trim().to_string()
     }
 
     /// Secret prompt
@@ -45,10 +49,18 @@ impl Utils {
 
     /// Current date in timestamp
     pub fn current_timestamp() -> u128 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
+        match SystemTime::now().duration_since(UNIX_EPOCH) {
+            Ok(duration) => duration.as_millis(),
+            Err(e) => {
+                Log::error(
+                    "Utils",
+                    "current_timestamp",
+                    "System clock error",
+                    e.to_string(),
+                );
+                0
+            }
+        }
     }
 
     /// SQLX query with a timeout

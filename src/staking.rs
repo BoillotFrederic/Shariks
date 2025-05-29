@@ -216,11 +216,6 @@ impl Staking {
             Self::flush_block(pg_pool, &tx_buffer, &addr_buffer).await?;
         }
 
-        Log::info_msg(
-            "Staking",
-            "generate_distribution",
-            "Staking distribution completed",
-        );
         Ok(())
     }
 
