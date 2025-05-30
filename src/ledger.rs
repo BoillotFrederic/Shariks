@@ -8,10 +8,10 @@
 use sqlx::{Error, PgPool, Postgres, Transaction as QuerySync};
 
 // Crates
-use crate::Utils;
 use crate::blockchain;
 use crate::blockchain::*;
 use crate::log::*;
+use crate::utils::Utils;
 
 // Ledger
 // ------

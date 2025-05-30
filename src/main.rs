@@ -11,34 +11,29 @@
 // The crypto you share… that shares back
 // Copyright © : 2025
 
-// Molduls
-mod blockchain;
-mod encryption;
-mod genesis;
-mod ledger;
-mod log;
-mod staking;
-mod utils;
-mod vault;
-mod wallet;
-
 // Dependencies
 use base64::Engine;
-use blockchain::*;
-use encryption::*;
-use genesis::*;
-use ledger::*;
-use log::*;
+use shariks::blockchain;
+use shariks::encryption::*;
+use shariks::genesis::*;
+use shariks::ledger::*;
+use shariks::log::*;
+use shariks::staking::*;
+use shariks::utils::*;
+use shariks::vault;
+use shariks::vault::*;
+use shariks::wallet::*;
 use sqlx::PgPool;
-use staking::*;
 use std::io;
-use utils::*;
-use vault::*;
-use wallet::*;
 
 // Main
+// ----
+
 #[tokio::main]
 async fn main() -> Result<(), sqlx::Error> {
+    // Init log
+    env_logger::init();
+
     // Start
     Log::info_msg("Main", "main", "Initialization start");
 
@@ -208,7 +203,9 @@ async fn main() -> Result<(), sqlx::Error> {
                     )
                     .await
                     {
-                        Ok(w) => w,
+                        Ok((phrase, _public_key, _private_key, _dh_public, _dh_secret)) => {
+                            println!("Mnemonic : {}", phrase)
+                        }
                         Err(e) => {
                             Log::error("Main", "main", "Failed to create wallet", &e.to_string());
                             continue;
@@ -236,7 +233,8 @@ async fn main() -> Result<(), sqlx::Error> {
             // CLI - check total supply
             "5" => {
                 Log::info_msg("Main", "main", "Check total supply");
-                Ledger::check_total_supply(&pg_pool, 100_000_000 * NANOSRKS_PER_SRKS).await?;
+                Ledger::check_total_supply(&pg_pool, 100_000_000 * blockchain::NANOSRKS_PER_SRKS)
+                    .await?;
             }
             // CLI - view keys with mnemonic
             "6" => {

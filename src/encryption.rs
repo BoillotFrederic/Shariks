@@ -4,26 +4,38 @@
 //! secure transactions, wallet authentication, and chain integrity within the Shariks blockchain.
 
 // Dependencies
+use argon2::password_hash::SaltString;
+use argon2::{Argon2, PasswordHasher};
 use base64::{Engine, engine::general_purpose};
 use bip39::Mnemonic;
 use chacha20poly1305::{
-    XChaCha20Poly1305, XNonce,
-    aead::{Aead, KeyInit},
+    Key, XChaCha20Poly1305, XNonce,
+    aead::{Aead, KeyInit, Payload},
 };
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use hex;
 use rand_core::RngCore;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sqlx::PgPool;
 use std::convert::TryInto;
 use x25519_dalek::{PublicKey as XPublicKey, StaticSecret};
 
 // Crates
-use crate::Wallet;
 use crate::log::*;
 use crate::utils::*;
+use crate::wallet::Wallet;
 
 // Types
 type DynError = Box<dyn std::error::Error>;
+
+#[derive(Serialize, Deserialize)]
+pub struct EncryptedPayload {
+    pub encrypted_data: String,
+    pub salt: String,
+    pub nonce: String,
+    pub kdf: &'static str,
+}
 
 // Encryption
 // ----------
@@ -289,5 +301,79 @@ impl Encryption {
     pub fn b64_to_nonce(b64: &str) -> Option<[u8; 24]> {
         let bytes = general_purpose::STANDARD.decode(b64).ok()?;
         bytes.try_into().ok()
+    }
+
+    pub fn encrypt_json(json: &Value, passphrase: &str) -> EncryptedPayload {
+        let salt = SaltString::generate(&mut rand::rngs::OsRng);
+        let argon2 = Argon2::default();
+
+        let password_hash = argon2
+            .hash_password(passphrase.as_bytes(), &salt)
+            .expect("Password hashing failed");
+
+        let hash = password_hash.hash.expect("Missing hash output");
+        let key_bytes = hash.as_bytes();
+        let key = Key::from_slice(&key_bytes[..32]);
+
+        let mut nonce = [0u8; 24];
+        rand::rngs::OsRng.fill_bytes(&mut nonce);
+        let cipher = XChaCha20Poly1305::new(key);
+
+        let payload = serde_json::to_vec(json).expect("Serialization failed");
+        let ciphertext = cipher
+            .encrypt(
+                &XNonce::from(nonce),
+                Payload {
+                    msg: &payload,
+                    aad: &[],
+                },
+            )
+            .expect("Encryption failed");
+
+        EncryptedPayload {
+            encrypted_data: general_purpose::STANDARD.encode(ciphertext),
+            salt: salt.to_string(),
+            nonce: general_purpose::STANDARD.encode(nonce),
+            kdf: "argon2",
+        }
+    }
+
+    pub fn decrypt_json(payload: &EncryptedPayload, passphrase: &str) -> Result<Value, String> {
+        let salt = SaltString::from_b64(&payload.salt).map_err(|_| "Invalid salt".to_string())?;
+
+        let argon2 = Argon2::default();
+        let password_hash = argon2
+            .hash_password(passphrase.as_bytes(), &salt)
+            .map_err(|_| "Failed to hash password".to_string())?;
+
+        let hash = password_hash
+            .hash
+            .ok_or_else(|| "Missing hash output".to_string())?;
+
+        let key_bytes = hash.as_bytes();
+
+        let key = Key::from_slice(&key_bytes[..32]);
+        let cipher = XChaCha20Poly1305::new(key);
+
+        let nonce_bytes = general_purpose::STANDARD
+            .decode(&payload.nonce)
+            .map_err(|_| "Invalid nonce base64".to_string())?;
+
+        let ciphertext = general_purpose::STANDARD
+            .decode(&payload.encrypted_data)
+            .map_err(|_| "Invalid encrypted data base64".to_string())?;
+
+        let decrypted = cipher
+            .decrypt(
+                XNonce::from_slice(&nonce_bytes),
+                Payload {
+                    msg: &ciphertext,
+                    aad: &[],
+                },
+            )
+            .map_err(|_| "Decryption failed".to_string())?;
+
+        serde_json::from_slice::<Value>(&decrypted)
+            .map_err(|_| "Invalid JSON after decryption".to_string())
     }
 }

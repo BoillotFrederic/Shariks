@@ -53,7 +53,7 @@ impl Wallet {
         exempt_fee: bool,
         staking_available: bool,
         pg_pool: &PgPool,
-    ) -> Result<Wallet, DynError> {
+    ) -> Result<(String, String, String, String, String), DynError> {
         // Keypair generate
         let (phrase, signing_key, verifying_key, dh_secret, dh_public) =
             match Encryption::generate_full_keypair_from_mnemonic(passphrase) {
@@ -71,8 +71,6 @@ impl Wallet {
         let public_key_hex = hex::encode(public_key_bytes);
         let dh_public = hex::encode(dh_public.as_bytes());
         let address = format!("{}{}", blockchain::PREFIX_ADDRESS, public_key_hex);
-
-        println!("Mnemonic : {}", phrase);
 
         // Check if the wallet is one of the first 100 referrals of the referrer
         let is_first_referrer = if referrer_found {
@@ -115,12 +113,16 @@ impl Wallet {
 
             match VaultService::set_owner_secret(owner_wallet_name, owner_secret).await {
                 Ok(()) => {
-                    println!("Secret : {} has been set", owner_wallet_name);
+                    Log::info_msg(
+                        "Wallet",
+                        "new",
+                        &format!("Secret : {} has been set", owner_wallet_name),
+                    );
                 }
                 Err(e) => Log::error("Wallet", "new", "Write secret failed", e),
             }
 
-            Utils::write_to_file(&format!("owners\\{}", owner_wallet_name), &address).map_err(
+            Utils::write_to_file(&format!("owners/{}", owner_wallet_name), &address).map_err(
                 |e| {
                     Log::error(
                         "Wallet",
@@ -161,8 +163,14 @@ impl Wallet {
             Log::error("Wallet", "new", "Insert wallet failed", e);
         }
 
-        // Return the wallet
-        Ok(wallet)
+        // Return the wallet setting
+        Ok((
+            phrase.clone(),
+            public_key_hex.clone(),
+            private_key_hex.clone(),
+            dh_public.clone(),
+            hex::encode(dh_secret.to_bytes()),
+        ))
     }
 
     /// Find a wallet

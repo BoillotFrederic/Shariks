@@ -13,10 +13,10 @@ use sqlx::{PgPool, Postgres, Row, Transaction as QuerySync};
 use uuid::Uuid;
 
 // Crates
-use crate::Utils;
 use crate::encryption::*;
 use crate::ledger::*;
 use crate::log::*;
+use crate::utils::Utils;
 use crate::wallet::*;
 
 /// Defines the format of a fee rule
@@ -308,7 +308,7 @@ impl Transaction {
                 Log::error_msg(
                     "Blockchain::Transaction",
                     "create",
-                    &format!("Not enough tokens, required is {}", super::to_srks(total)),
+                    &format!("Not enough tokens, required is {}", to_srks(total)),
                 );
                 return None;
             }

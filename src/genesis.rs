@@ -27,12 +27,12 @@ use std::env;
 use uuid::Uuid;
 
 // Crates
-use crate::Utils;
 use crate::blockchain;
 use crate::blockchain::*;
 use crate::encryption::*;
 use crate::ledger::*;
 use crate::log::*;
+use crate::utils::Utils;
 use crate::vault::*;
 use crate::wallet::*;
 
@@ -58,7 +58,9 @@ impl Genesis {
         )
         .await
         {
-            Ok(w) => w,
+            Ok((_phrase, public_key, _private_key, _dh_public, _dh_secret)) => {
+                Wallet::add_prefix(&public_key)
+            }
             Err(e) => {
                 Log::error("Genesis", "start", "Failed to create wallet", e.to_string());
                 return Err(e);
@@ -78,7 +80,7 @@ impl Genesis {
         let genesis_tx = blockchain::Transaction {
             id: Uuid::new_v4(),
             sender: WALLET_GENESIS.to_string(),
-            recipient: public_sale_wallet.address,
+            recipient: public_sale_wallet,
             amount: 100_000_000_000_000_000,
             fee: 0,
             fee_rule,
@@ -154,7 +156,9 @@ impl Genesis {
             )
             .await
             {
-                Ok(w) => w,
+                Ok((_phrase, public_key, _private_key, _dh_public, _dh_secret)) => {
+                    Wallet::add_prefix(&public_key)
+                }
                 Err(e) => {
                     Log::error(
                         "Genesis",
@@ -166,7 +170,7 @@ impl Genesis {
                 }
             };
 
-            wallet_addresses.push(wallet.address.clone());
+            wallet_addresses.push(wallet.clone());
         }
 
         let distribution = vec![

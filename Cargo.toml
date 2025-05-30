@@ -1,16 +1,27 @@
 [package]
-name = "Shariks"
+name = "shariks"
 version = "0.1.0"
 edition = "2024"
-authors = ["NeoDev @ "]
+authors = ["NeoDev @ contact@shariks.org"]
 license = "Apache-2.0"
+
+[[bin]]
+name = "shariks_api"
+path = "src/bin/api.rs"
+
+[[bin]]
+name = "shariks_cli"
+path = "src/main.rs"
 
 [dependencies]
 actix-web = "4.10.2"
 base64 = "0.22.1"
 bip39 = { version = "2.1.0", features = ["rand"] }
 chacha20poly1305 = "0.10.1"
+dotenv = "0.15"
 dotenvy = "0.15.7"
+env_logger = "0.11"
+argon2 = { version = "0.5", features = ["std"] }
 ed25519-dalek = { version = "2.1.1", features = ["hazmat", "batch"] }
 hex = "0.4.3"
 chrono = { version = "0.4", features = ["serde"] }
