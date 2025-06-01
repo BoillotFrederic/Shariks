@@ -1,11 +1,17 @@
 // Dependencies
+use actix_cors::Cors;
 use actix_web::{App, HttpServer, web};
 use dotenv::dotenv;
-use shariks::api_module::handler::*;
-use shariks::log::*;
+use shariks_core::log::*;
 use sqlx::postgres::PgPoolOptions;
 use std::env;
 use std::io;
+
+// Crates
+use crate::handler::*;
+
+// Modules
+mod handler;
 
 // Main
 // ----
@@ -46,12 +52,20 @@ async fn main() -> io::Result<()> {
 
     HttpServer::new(move || {
         App::new()
+            .wrap(
+                Cors::default()
+                    .allow_any_origin()
+                    .allow_any_method()
+                    .allow_any_header(),
+            )
             // App data
             .app_data(web::Data::new(pg_pool.clone()))
             // health API
             .route("/health", web::get().to(Handler::health))
-            // Create a new wallet
-            .route("/wallet/create", web::post().to(Handler::new_wallet))
+            // Register a new wallet
+            .route("/wallet/register", web::post().to(Handler::wallet_register))
+            // Check if wallet exists
+            .route("/wallet/exists", web::post().to(Handler::wallet_exists))
             .route("/view_blocks", web::get().to(Handler::view_blocks))
             .route("/block/latest", web::get().to(Handler::latest_block))
         // .route(

@@ -1,5 +1,4 @@
-// Root API modules
-pub mod api_module;
+// Root modules
 pub mod blockchain;
 pub mod encryption;
 pub mod genesis;

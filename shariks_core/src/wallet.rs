@@ -173,6 +173,70 @@ impl Wallet {
         ))
     }
 
+    /// Register a new wallet
+    pub async fn register(
+        referrer_found: bool,
+        referrer: &str,
+        address: &str,
+        dh_public: &str,
+        pg_pool: &PgPool,
+    ) -> bool {
+        // Check if the wallet is one of the first 100 referrals of the referrer
+        let is_first_referrer = if referrer_found {
+            let updated = Utils::with_timeout(
+                sqlx::query!(
+                    r#"
+                    UPDATE core.wallets
+                    SET referrer_count = referrer_count + 1
+                    WHERE address = $1
+                    RETURNING referrer_count
+                    "#,
+                    referrer
+                )
+                .fetch_one(pg_pool),
+                30,
+            )
+            .await;
+
+            match updated {
+                Ok(row) => row.referrer_count <= 100,
+                Err(e) => {
+                    Log::error("Wallet", "register", "Update referrer_count failed", e);
+                    false
+                }
+            }
+        } else {
+            false
+        };
+
+        // Insert the wallet
+        let result = Utils::with_timeout(sqlx::query!(
+            r#"
+            INSERT INTO core.wallets (address, dh_public, referrer, first_referrer, exempt_fee, staking_available)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            "#,
+            address,
+            dh_public,
+            referrer,
+            is_first_referrer,
+            false,
+            true
+        )
+        .execute(pg_pool), 30)
+        .await;
+
+        match result {
+            Ok(_) => {
+                Log::info_msg("Wallet", "register", "A new wallet has been registered");
+                true
+            }
+            Err(e) => {
+                Log::error("Wallet", "register", "Insert wallet failed", e);
+                false
+            }
+        }
+    }
+
     /// Find a wallet
     pub async fn find(pool: &PgPool, address: &str) -> Result<Wallet, Error> {
         let result = Utils::with_timeout(

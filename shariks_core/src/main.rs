@@ -13,16 +13,16 @@
 
 // Dependencies
 use base64::Engine;
-use shariks::blockchain;
-use shariks::encryption::*;
-use shariks::genesis::*;
-use shariks::ledger::*;
-use shariks::log::*;
-use shariks::staking::*;
-use shariks::utils::*;
-use shariks::vault;
-use shariks::vault::*;
-use shariks::wallet::*;
+use shariks_core::blockchain;
+use shariks_core::encryption::*;
+use shariks_core::genesis::*;
+use shariks_core::ledger::*;
+use shariks_core::log::*;
+use shariks_core::staking::*;
+use shariks_core::utils::*;
+use shariks_core::vault;
+use shariks_core::vault::*;
+use shariks_core::wallet::*;
 use sqlx::PgPool;
 use std::io;
 
