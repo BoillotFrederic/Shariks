@@ -66,6 +66,28 @@ async fn main() -> io::Result<()> {
             .route("/wallet/register", web::post().to(Handler::wallet_register))
             // Check if wallet exists
             .route("/wallet/exists", web::post().to(Handler::wallet_exists))
+            // Wallet find
+            .route("/wallet/find", web::post().to(Handler::wallet_find))
+            // Update wallet last_login
+            .route(
+                "/wallet/update_last_login",
+                web::post().to(Handler::wallet_update_last_login),
+            )
+            // Update wallet last_login
+            .route(
+                "/wallet/dashboard",
+                web::post().to(Handler::dashbaord_wallet_data),
+            )
+            // Update wallet last_login
+            .route(
+                "/wallet/create_transaction",
+                web::post().to(Handler::create_transaction),
+            )
+            // Get all transactions
+            .route(
+                "/wallet/get_transactions",
+                web::post().to(Handler::get_transactions),
+            )
             .route("/view_blocks", web::get().to(Handler::view_blocks))
             .route("/block/latest", web::get().to(Handler::latest_block))
         // .route(

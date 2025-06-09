@@ -179,13 +179,24 @@ impl Staking {
                 return Ok(());
             }
 
-            let signature = Encryption::sign_transaction(
-                staking_private_key.to_string(),
-                staking_wallet.to_string(),
-                address.clone(),
+            let message = format!(
+                "{}{}{}{}{}",
+                staking_wallet,
+                address,
                 reward,
-                "".to_string(),
+                "",
+                Utc::now()
             );
+            let signature =
+                Encryption::sign_message(staking_private_key.to_string(), message.clone());
+
+            // let signature = Encryption::sign_transaction(
+            //     staking_private_key.to_string(),
+            //     staking_wallet.to_string(),
+            //     address.clone(),
+            //     reward,
+            //     "".to_string(),
+            // );
 
             if let Some(tx_obj) = Transaction::create(
                 staking_wallet,
@@ -195,6 +206,7 @@ impl Staking {
                 "",
                 "",
                 &signature,
+                &message,
                 pg_pool,
             )
             .await

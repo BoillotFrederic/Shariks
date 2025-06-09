@@ -13,6 +13,7 @@
 
 // Dependencies
 use base64::Engine;
+use chrono::Utc;
 use shariks_core::blockchain;
 use shariks_core::encryption::*;
 use shariks_core::genesis::*;
@@ -95,7 +96,7 @@ async fn main() -> Result<(), sqlx::Error> {
                 let sender_dh_secret_str = Utils::prompt_secret("Secret DH :");
                 let private_key = Utils::prompt_secret("Private key :");
 
-                // CLI - Memo
+                // Memo
                 let (recipient_dh_public_str, recipient_dh_public_opt) =
                     Encryption::get_dh_public_key_data_by_address(&pg_pool, &recipient).await?;
 
@@ -131,13 +132,15 @@ async fn main() -> Result<(), sqlx::Error> {
                     format!("{}:{}", encrypted_memo, nonce_encoded)
                 };
 
-                let signature = Encryption::sign_transaction(
-                    private_key,
-                    sender.clone(),
-                    recipient.clone(),
-                    amount,
-                    memo.clone(),
-                );
+                let message = format!("{}{}{}{}{}", sender, recipient, amount, memo, Utc::now());
+                let signature = Encryption::sign_message(private_key.clone(), message.clone());
+                // let signature = Encryption::sign_transaction(
+                //     private_key,
+                //     sender.clone(),
+                //     recipient.clone(),
+                //     amount,
+                //     memo.clone(),
+                // );
 
                 if let Some(tx) = blockchain::Transaction::create(
                     &sender,
@@ -147,6 +150,7 @@ async fn main() -> Result<(), sqlx::Error> {
                     &recipient_dh_public_str,
                     &memo,
                     &signature,
+                    &message,
                     &pg_pool,
                 )
                 .await

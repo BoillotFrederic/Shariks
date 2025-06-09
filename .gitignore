@@ -29,6 +29,9 @@ Cargo.lock
 # Blockchain
 blockchain.json
 
+# Cache
+**/cache/
+
 # Exempt fees addresses
 exempt_fees_addresses.json
 

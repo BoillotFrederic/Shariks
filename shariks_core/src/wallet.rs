@@ -38,7 +38,9 @@ pub const WALLET_GENESIS: &str = "SRKS_genesis";
 pub struct Wallet {
     pub address: String,
     pub referrer: Option<String>,
+    pub dh_public: Option<String>,
     pub first_referrer: bool,
+    pub referrer_count: i64,
     pub staking_available: bool,
     pub last_login: DateTime<Utc>,
 }
@@ -139,7 +141,9 @@ impl Wallet {
         let wallet = Wallet {
             address: address.clone(),
             referrer: (!referrer.is_empty()).then(|| referrer.to_string()),
+            dh_public: (!dh_public.is_empty()).then(|| dh_public.to_string()),
             first_referrer: is_first_referrer,
+            referrer_count: 0,
             staking_available: true,
             last_login: Utc::now(),
         };
@@ -246,7 +250,9 @@ impl Wallet {
                 SELECT
                     address,
                     referrer,
+                    dh_public,
                     first_referrer,
+                    referrer_count,
                     staking_available,
                     last_login as "last_login: DateTime<chrono::Utc>"
                 FROM core.wallets
@@ -262,7 +268,9 @@ impl Wallet {
         Ok(result.unwrap_or(Wallet {
             address: "".to_string(),
             referrer: None,
+            dh_public: None,
             first_referrer: false,
+            referrer_count: 0,
             staking_available: true,
             last_login: Utc::now(),
         }))
@@ -295,7 +303,6 @@ impl Wallet {
     }
 
     /// Updates the last wallet connection
-    #[allow(unused)]
     pub async fn update_last_login(pool: &PgPool, address: &str) -> Result<(), sqlx::Error> {
         Utils::with_timeout(
             sqlx::query!(
@@ -349,7 +356,7 @@ impl Wallet {
             sqlx::query_as!(
                 Wallet,
                 r#"
-                SELECT address, referrer, first_referrer, staking_available,
+                SELECT address, referrer, dh_public, first_referrer, referrer_count, staking_available,
                 last_login as "last_login: DateTime<chrono::Utc>"
                 FROM core.wallets
                 "#

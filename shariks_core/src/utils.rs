@@ -7,6 +7,7 @@
 // Dependencies
 use futures::StreamExt;
 use rpassword::read_password;
+use std::fs;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::{self, Read, Write};
@@ -125,6 +126,16 @@ impl Utils {
         let mut content = String::new();
 
         file.read_to_string(&mut content)?;
-        Ok(content)
+        Ok(content.trim().to_string())
+    }
+
+    /// Delete a file
+    pub fn file_safe_delete(path: &str) {
+        if fs::metadata(path).is_ok() {
+            match fs::remove_file(path) {
+                Ok(_) => {}
+                Err(_e) => {}
+            }
+        }
     }
 }

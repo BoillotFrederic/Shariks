@@ -31,8 +31,8 @@ pub struct FeeRule {
 // Globals
 const MIN_AMOUNT: u64 = 1000000;
 pub const NANOSRKS_PER_SRKS: u64 = 1_000_000_000;
-const PERCENT_BASE: u64 = 100_000;
-const FEE_RATE: u64 = 1_000;
+pub const PERCENT_BASE: u64 = 100_000;
+pub const FEE_RATE: u64 = 1_000;
 const FEE_MAX: u64 = 100 * NANOSRKS_PER_SRKS;
 pub const PREFIX_ADDRESS: &str = "SRKS_";
 
@@ -144,6 +144,16 @@ pub struct Transaction {
     pub recipient_dh_public: String,
     pub memo: String,
 }
+#[derive(sqlx::FromRow, Debug, Serialize)]
+pub struct GetTransaction {
+    pub sender: String,
+    pub recipient: String,
+    pub amount_srks: Option<f64>,
+    pub timestamp: i64,
+    pub sender_dh_public: Option<String>,
+    pub recipient_dh_public: Option<String>,
+    pub memo: Option<String>,
+}
 
 impl Transaction {
     // Create a transaction
@@ -155,6 +165,7 @@ impl Transaction {
         recipient_dh_public: &str,
         memo: &str,
         signature: &str,
+        message: &str,
         pg_pool: &PgPool,
     ) -> Option<Transaction> {
         // Error : prefix
@@ -233,9 +244,9 @@ impl Transaction {
 
         // Error : invalid signature
         let public_key = sender_wallet.address.strip_prefix("SRKS_").unwrap_or("");
-        let message = format!("{}:{}:{}:{}", sender, recipient, amount, memo);
+        //let message = format!("{}:{}:{}:{}", sender, recipient, amount, memo);
 
-        if !Encryption::verify_transaction(public_key, &message, signature) {
+        if !Encryption::verify_signature(public_key, &message, signature) {
             Log::error_msg("Blockchain::Transaction", "create", "Invalid signature");
             return None;
         }
@@ -442,6 +453,146 @@ impl Transaction {
         }
 
         Ok(result)
+    }
+
+    /// Get totals for incoming and outgoing for a wallet
+    pub async fn get_totals_inout(
+        pool: &PgPool,
+        address: &str,
+    ) -> Result<((f64, u64), (f64, u64)), sqlx::Error> {
+        let incoming_fut = Utils::with_timeout(
+            sqlx::query!(
+                r#"
+                SELECT SUM(amount)::BIGINT as sum, COUNT(*)::BIGINT as count
+                FROM core.transactions
+                WHERE recipient = $1
+                "#,
+                address
+            )
+            .fetch_one(pool),
+            30,
+        );
+
+        let outgoing_fut = Utils::with_timeout(
+            sqlx::query!(
+                r#"
+                SELECT SUM(amount)::BIGINT as sum, COUNT(*)::BIGINT as count
+                FROM core.transactions
+                WHERE sender = $1
+                "#,
+                address
+            )
+            .fetch_one(pool),
+            30,
+        );
+
+        let (incoming, outgoing) = tokio::join!(incoming_fut, outgoing_fut);
+
+        let incoming_row = incoming?;
+        let outgoing_row = outgoing?;
+
+        Ok((
+            (
+                to_srks(incoming_row.sum.unwrap_or(0) as u64),
+                incoming_row.count.unwrap_or(0) as u64,
+            ),
+            (
+                to_srks(outgoing_row.sum.unwrap_or(0) as u64),
+                outgoing_row.count.unwrap_or(0) as u64,
+            ),
+        ))
+    }
+
+    /// Get rewards staking for a wallet
+    pub async fn get_staking_rewards(pool: &PgPool, address: &str) -> Result<f64, sqlx::Error> {
+        let staking_address = Utils::read_from_file("owners/STAKING").map_err(|e| e)?;
+        let rewards = Utils::with_timeout(
+            sqlx::query_scalar!(
+                r#"
+                SELECT SUM(amount)::BIGINT
+                FROM core.transactions
+                WHERE recipient = $1 AND sender = $2
+                "#,
+                address,
+                staking_address
+            )
+            .fetch_one(pool),
+            30,
+        )
+        .await?;
+
+        Ok(to_srks(rewards.unwrap_or(0) as u64))
+    }
+
+    /// Get rewards of transaction fee of referral
+    pub async fn get_fee_rewards(pool: &PgPool, address: &str) -> Result<f64, sqlx::Error> {
+        let rewards = Utils::with_timeout(
+            sqlx::query_scalar!(
+                r#"
+                SELECT SUM(fee * (fee_referral / 100000.0))::BIGINT AS referral_rewards
+                FROM core.transactions
+                WHERE referrer = $1
+                "#,
+                address.trim()
+            )
+            .fetch_one(pool),
+            30,
+        )
+        .await?;
+
+        Ok(to_srks(rewards.unwrap_or(0) as u64))
+    }
+
+    /// Get all fee of transaction
+    pub async fn get_fee_transaction(pool: &PgPool, address: &str) -> Result<f64, sqlx::Error> {
+        let rewards = Utils::with_timeout(
+            sqlx::query_scalar!(
+                r#"
+                SELECT SUM(fee)::BIGINT
+                FROM core.transactions
+                WHERE sender = $1
+                "#,
+                address.trim()
+            )
+            .fetch_one(pool),
+            30,
+        )
+        .await?;
+
+        Ok(to_srks(rewards.unwrap_or(0) as u64))
+    }
+
+    /// Get incoming/outgoing transactions
+    pub async fn get_all_transactions(
+        pool: &PgPool,
+        address: &str,
+        start: u64,
+    ) -> Result<Vec<GetTransaction>, sqlx::Error> {
+        let transactions = sqlx::query_as!(
+            GetTransaction,
+            r#"
+            SELECT
+                sender,
+                recipient,
+                ((amount::FLOAT8 / $3) + (fee::FLOAT8 / $3)) as amount_srks,
+                timestamp,
+                sender_dh_public,
+                recipient_dh_public,
+                memo
+            FROM core.transactions
+            WHERE recipient = $1 OR sender = $1
+            ORDER BY timestamp DESC
+            OFFSET $2
+            LIMIT 20
+            "#,
+            address,
+            start as i64,
+            NANOSRKS_PER_SRKS as f64
+        )
+        .fetch_all(pool)
+        .await?;
+
+        Ok(transactions)
     }
 
     /// Fee adjustment so that no tokens or nano tokens are lost

@@ -22,6 +22,7 @@
 //!   - `PUBLIC_SALE` - Intended for public sale.
 
 // Dependencies
+use chrono::Utc;
 use sqlx::PgPool;
 use std::env;
 use uuid::Uuid;
@@ -184,13 +185,26 @@ impl Genesis {
         let result = {
             for (recipient, amount) in distribution {
                 // Signature
-                let signature = Encryption::sign_transaction(
-                    public_sale_secret.private_key.clone(),
-                    public_sale_address.clone(),
-                    recipient.clone(),
+                let message = format!(
+                    "{}{}{}{}{}",
+                    public_sale_address,
+                    recipient,
                     amount,
-                    "Initial distribution".to_string(),
+                    "Initial distribution",
+                    Utc::now()
                 );
+                let signature = Encryption::sign_message(
+                    public_sale_secret.private_key.clone(),
+                    message.clone(),
+                );
+
+                // let signature = Encryption::sign_transaction(
+                //     public_sale_secret.private_key.clone(),
+                //     public_sale_address.clone(),
+                //     recipient.clone(),
+                //     amount,
+                //     "Initial distribution".to_string(),
+                // );
 
                 // Transaction
                 if let Some(tx) = blockchain::Transaction::create(
@@ -201,6 +215,7 @@ impl Genesis {
                     "",
                     "Initial distribution",
                     &signature,
+                    &message,
                     &pg_pool,
                 )
                 .await

@@ -8,6 +8,7 @@ mod encryption;
 mod handler;
 
 // Crates
+use crate::encryption::*;
 use crate::handler::*;
 
 // Structures
@@ -18,6 +19,10 @@ pub struct WalletStruct {
     pub private_key: String,
     pub dh_public: String,
     pub dh_secret: String,
+}
+#[derive(Serialize, Deserialize)]
+pub struct SignatureStruct {
+    pub signature: String,
 }
 
 // Genrate wallet
@@ -55,5 +60,40 @@ pub fn restore_wallet(phrase: &str, passphrase: &str) -> JsValue {
             to_value(&wallet).unwrap()
         }
         Err(e) => JsValue::from_str(&format!("Error restore wallet : {}", e)),
+    }
+}
+
+// Create signature
+#[wasm_bindgen]
+pub fn create_signature(private_key: &str, message: &str) -> JsValue {
+    let signaure_string =
+        Encryption::create_signature(private_key.to_string(), message.to_string());
+    let signature = SignatureStruct {
+        signature: signaure_string.to_string(),
+    };
+
+    to_value(&signature).unwrap()
+}
+
+// Encryp memo
+#[wasm_bindgen]
+pub fn encrypt_memo(dh_public: &str, dh_secret: &str, memo: &str) -> JsValue {
+    let memo_truncated = &memo[..memo.len().min(255)];
+    let memo = Handler::encryption_memo(dh_secret, dh_public, memo_truncated);
+    to_value(&memo.unwrap()).unwrap()
+}
+
+// Decrypt memo
+#[wasm_bindgen]
+pub fn decrypt_memo(dh_public: &str, dh_secret: &str, memo: &str) -> JsValue {
+    match Handler::decryption_memo(dh_secret, dh_public, memo) {
+        Ok(result) => JsValue::from_str(&result),
+        Err(e) => {
+            web_sys::console::error_1(&JsValue::from_str(&format!(
+                "Decrypt error: {}",
+                e.to_string()
+            )));
+            JsValue::from_str("")
+        }
     }
 }
