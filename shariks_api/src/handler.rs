@@ -3,6 +3,7 @@ use actix_web::{HttpResponse, Responder, web};
 use serde::Deserialize;
 use std::fs;
 use std::time::Duration;
+// use tokio::time::sleep;
 
 // Crates
 use shariks_core::blockchain;
@@ -93,6 +94,7 @@ impl Handler {
                         .await;
 
                 if success {
+                    // sleep(Duration::from_secs(2)).await;
                     HttpResponse::Ok().json(serde_json::json!({ "register": true }))
                 } else {
                     HttpResponse::InternalServerError().body("Error saving wallet.")
@@ -138,6 +140,7 @@ impl Handler {
                     Err(_e) => false,
                 };
 
+            // sleep(Duration::from_secs(2)).await;
             HttpResponse::Ok().json(serde_json::json!({
                 "status": "ok",
                 "updated": updated
@@ -218,7 +221,7 @@ impl Handler {
 
         let _ = fs::create_dir_all("cache");
         let _ = fs::write(&cache_path, serde_json::to_string(&response).unwrap());
-
+        // sleep(Duration::from_secs(2)).await;
         HttpResponse::Ok().json(response)
     }
 
@@ -343,6 +346,7 @@ impl Handler {
     ) -> impl Responder {
         let address = payload.address.trim();
         let start = payload.start;
+        // sleep(Duration::from_secs(2)).await;
 
         match blockchain::Transaction::get_all_transactions(&pg_pool, &address, start).await {
             Ok(t) => HttpResponse::Ok().json(serde_json::json!({

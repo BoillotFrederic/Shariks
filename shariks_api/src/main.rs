@@ -73,12 +73,12 @@ async fn main() -> io::Result<()> {
                 "/wallet/update_last_login",
                 web::post().to(Handler::wallet_update_last_login),
             )
-            // Update wallet last_login
+            // Update wallet dashboard
             .route(
                 "/wallet/dashboard",
                 web::post().to(Handler::dashbaord_wallet_data),
             )
-            // Update wallet last_login
+            // Create a transaction
             .route(
                 "/wallet/create_transaction",
                 web::post().to(Handler::create_transaction),

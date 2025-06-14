@@ -574,7 +574,10 @@ impl Transaction {
             SELECT
                 sender,
                 recipient,
-                ((amount::FLOAT8 / $3) + (fee::FLOAT8 / $3)) as amount_srks,
+                CASE
+                    WHEN recipient = $1 THEN amount::FLOAT8 / $3
+                    ELSE (amount::FLOAT8 / $3) + (fee::FLOAT8 / $3)
+                END AS amount_srks,
                 timestamp,
                 sender_dh_public,
                 recipient_dh_public,
@@ -583,7 +586,7 @@ impl Transaction {
             WHERE recipient = $1 OR sender = $1
             ORDER BY timestamp DESC
             OFFSET $2
-            LIMIT 20
+            LIMIT 10
             "#,
             address,
             start as i64,

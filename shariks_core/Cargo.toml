@@ -23,7 +23,7 @@ rpassword = "7.4.0"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
 sha2 = "0.10.8"
-sqlx = { version = "0.8.5", features = ["runtime-tokio-native-tls", "postgres", "uuid", "time", "chrono", "bigdecimal"] }
+sqlx = { version = "0.8.5", features = ["runtime-tokio-native-tls", "postgres", "uuid", "time", "chrono"] }
 tokio = { version = "1.44.2", features = ["full"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 vaultrs = "0.7.4"
