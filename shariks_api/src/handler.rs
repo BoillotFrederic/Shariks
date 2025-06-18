@@ -1,7 +1,9 @@
 // Dependencies
 use actix_web::{HttpResponse, Responder, web};
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::fs;
+use std::path::Path;
 use std::time::Duration;
 // use tokio::time::sleep;
 
@@ -215,6 +217,7 @@ impl Handler {
             "referrer": referrer,
             "staking_rewards": staking_rewards,
             "fee": blockchain::FEE_RATE as f64 / blockchain::PERCENT_BASE as f64,
+            "fee_max": blockchain::to_srks(blockchain::FEE_MAX),
             "fee_rewards": fee_rewards,
             "fee_transaction": fee_transaction
         });
@@ -360,20 +363,67 @@ impl Handler {
         }
     }
 
-    /**/
-    pub async fn view_blocks(pg_pool: web::Data<PgPool>) -> impl Responder {
-        match blockchain::load_blocks_from_db(pg_pool.get_ref()).await {
-            Ok(blocks) => HttpResponse::Ok().json(blocks),
-            Err(e) => HttpResponse::InternalServerError().body(format!("DB error: {}", e)),
+    /// Official wallets list
+    pub async fn get_official_wallets() -> impl Responder {
+        let owners_dir = Path::new("owners");
+        let mut wallets: HashMap<String, String> = HashMap::new();
+        let read_dir_result = fs::read_dir(owners_dir);
+
+        match read_dir_result {
+            Ok(entries) => {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_file() {
+                        if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+                            match fs::read_to_string(&path) {
+                                Ok(content) => {
+                                    wallets
+                                        .insert(filename.to_string(), content.trim().to_string());
+                                }
+                                Err(e) => {
+                                    return HttpResponse::InternalServerError()
+                                        .body(format!("Read file error {}: {}", filename, e));
+                                }
+                            }
+                        }
+                    }
+                }
+                HttpResponse::Ok().json(wallets)
+            }
+            Err(e) => HttpResponse::InternalServerError()
+                .body(format!("Unable to read the file 'owners': {}", e)),
         }
     }
 
-    pub async fn latest_block() -> impl Responder {
-        // Placeholder - replace with real DB call
-        HttpResponse::Ok().json(serde_json::json!({
-            "block": "latest block hash placeholder"
-        }))
+    /// Give free tokens for test
+    pub async fn givetokens(pg_pool: web::Data<PgPool>, path: web::Path<String>) -> impl Responder {
+        let address = path.into_inner();
+
+        match blockchain::Transaction::givetokens(pg_pool.get_ref(), &address).await {
+            Ok(_) => HttpResponse::Ok().json(serde_json::json!({
+                "status": "OK"
+            })),
+            Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({
+                "status": "KO",
+                "error": format!("Transaction failed: {}", e)
+            })),
+        }
     }
+
+    /**/
+    // pub async fn view_blocks(pg_pool: web::Data<PgPool>) -> impl Responder {
+    //     match blockchain::load_blocks_from_db(pg_pool.get_ref()).await {
+    //         Ok(blocks) => HttpResponse::Ok().json(blocks),
+    //         Err(e) => HttpResponse::InternalServerError().body(format!("DB error: {}", e)),
+    //     }
+    // }
+    //
+    // pub async fn latest_block() -> impl Responder {
+    //     // Placeholder - replace with real DB call
+    //     HttpResponse::Ok().json(serde_json::json!({
+    //         "block": "latest block hash placeholder"
+    //     }))
+    // }
 
     // pub async fn wallet_balance(path: web::Path<String>) -> impl Responder {
     //     let address = path.into_inner();

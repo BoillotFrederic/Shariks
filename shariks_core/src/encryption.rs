@@ -212,32 +212,6 @@ impl Encryption {
         hex::encode(signature.to_bytes())
     }
 
-    // /// Sign a transaction with a private key and other parameters
-    // pub fn sign_transaction(
-    //     private_key: String,
-    //     sender: String,
-    //     recipient: String,
-    //     amount: u64,
-    //     memo: String,
-    // ) -> String {
-    //     // Errors
-    //     let key_bytes = match hex::decode(private_key.trim()) {
-    //         Ok(bytes) => bytes,
-    //         Err(_) => return String::new(),
-    //     };
-    //
-    //     let key_array: [u8; 32] = match key_bytes.try_into() {
-    //         Ok(array) => array,
-    //         Err(_) => return String::new(),
-    //     };
-    //
-    //     // Sign
-    //     let signing_key = SigningKey::from_bytes(&key_array);
-    //     let message = format!("{}:{}:{}:{}", sender, recipient, amount, memo);
-    //     let signature: Signature = signing_key.sign(message.as_bytes());
-    //     hex::encode(signature.to_bytes())
-    // }
-
     /// Verify the transaction signature using the public key
     pub fn verify_signature(public_key_hex: &str, message: &str, signature_hex: &str) -> bool {
         // Errors
@@ -266,35 +240,6 @@ impl Encryption {
         let signature = Signature::from_bytes(&signature_array);
         verifying_key.verify(message.as_bytes(), &signature).is_ok()
     }
-
-    // /// Verify the transaction signature using the public key
-    // pub fn verify_signature(public_key_hex: &str, message: &str, signature_hex: &str) -> bool {
-    //     // Erros
-    //     let public_key_bytes = match hex::decode(public_key_hex) {
-    //         Ok(bytes) => bytes,
-    //         Err(_) => return false,
-    //     };
-    //     let public_key_array: [u8; 32] = match public_key_bytes.try_into() {
-    //         Ok(array) => array,
-    //         Err(_) => return false,
-    //     };
-    //     let verifying_key = match VerifyingKey::from_bytes(&public_key_array) {
-    //         Ok(key) => key,
-    //         Err(_) => return false,
-    //     };
-    //     let signature_bytes = match hex::decode(signature_hex) {
-    //         Ok(bytes) => bytes,
-    //         Err(_) => return false,
-    //     };
-    //     let signature_array: [u8; 64] = match signature_bytes.try_into() {
-    //         Ok(array) => array,
-    //         Err(_) => return false,
-    //     };
-    //
-    //     // Check the signature
-    //     let signature = Signature::from_bytes(&signature_array);
-    //     verifying_key.verify(message.as_bytes(), &signature).is_ok()
-    // }
 
     /// Find the public DH in hex and XPublicKey
     pub async fn get_dh_public_key_data_by_address(

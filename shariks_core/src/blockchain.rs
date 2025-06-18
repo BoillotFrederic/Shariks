@@ -6,6 +6,8 @@
 
 // Dependencies
 //use futures::StreamExt;
+use base64::Engine;
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json;
 use sha2::{Digest, Sha256};
@@ -17,6 +19,7 @@ use crate::encryption::*;
 use crate::ledger::*;
 use crate::log::*;
 use crate::utils::Utils;
+use crate::vault::*;
 use crate::wallet::*;
 
 /// Defines the format of a fee rule
@@ -33,7 +36,7 @@ const MIN_AMOUNT: u64 = 1000000;
 pub const NANOSRKS_PER_SRKS: u64 = 1_000_000_000;
 pub const PERCENT_BASE: u64 = 100_000;
 pub const FEE_RATE: u64 = 1_000;
-const FEE_MAX: u64 = 100 * NANOSRKS_PER_SRKS;
+pub const FEE_MAX: u64 = 100 * NANOSRKS_PER_SRKS;
 pub const PREFIX_ADDRESS: &str = "SRKS_";
 
 // Block
@@ -244,8 +247,6 @@ impl Transaction {
 
         // Error : invalid signature
         let public_key = sender_wallet.address.strip_prefix("SRKS_").unwrap_or("");
-        //let message = format!("{}:{}:{}:{}", sender, recipient, amount, memo);
-
         if !Encryption::verify_signature(public_key, &message, signature) {
             Log::error_msg("Blockchain::Transaction", "create", "Invalid signature");
             return None;
@@ -339,6 +340,115 @@ impl Transaction {
             recipient_dh_public: recipient_dh_public.to_string(),
             memo: memo.to_string(),
         })
+    }
+
+    /// Send a transaction
+    pub async fn send(
+        sender: &str,
+        recipient: &str,
+        amount_float: f64,
+        sender_dh_public_str: &str,
+        sender_dh_secret_str: &str,
+        private_key: &str,
+        memo_input: &str,
+        pg_pool: &PgPool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let amount: u64 = to_nanosrks(amount_float);
+
+        // Recipient DH public/secret
+        let (recipient_dh_public_str, recipient_dh_public_opt) =
+            Encryption::get_dh_public_key_data_by_address(pg_pool, recipient).await?;
+
+        let recipient_dh_public = match recipient_dh_public_opt {
+            Some(key) => key,
+            None => {
+                Log::error_msg(
+                    "blockchain::Transaction",
+                    "send",
+                    "Recipient DH key not found",
+                );
+                return Ok(());
+            }
+        };
+
+        let sender_dh_secret = match Encryption::hex_to_static_secret(sender_dh_secret_str) {
+            Some(secret) => secret,
+            None => {
+                Log::error_msg(
+                    "blockchain::Transaction",
+                    "send",
+                    "Invalid sender DH secret",
+                );
+                return Ok(());
+            }
+        };
+
+        // Memo
+        let memo_input_truncated = &memo_input[..memo_input.len().min(255)];
+        let (encrypted_memo, nonce) = Encryption::encrypt_message(
+            &sender_dh_secret,
+            &recipient_dh_public,
+            memo_input_truncated,
+        );
+
+        let nonce_encoded = base64::engine::general_purpose::STANDARD.encode(nonce);
+        let memo = if encrypted_memo.is_empty() {
+            "".to_string()
+        } else {
+            format!("{}:{}", encrypted_memo, nonce_encoded)
+        };
+
+        // Signature
+        let message = format!("{}{}{}{}{}", sender, recipient, amount, memo, Utc::now());
+        let signature = Encryption::sign_message(private_key.to_string(), message.clone());
+
+        // Transaction
+        if let Some(tx) = Transaction::create(
+            sender,
+            recipient,
+            amount,
+            sender_dh_public_str,
+            &recipient_dh_public_str,
+            &memo,
+            &signature,
+            &message,
+            pg_pool,
+        )
+        .await
+        {
+            // Finalize
+            let (last_index, last_hash) = Block::get_last_block_meta(pg_pool).await?;
+            let block = Block::new(last_index + 1, vec![tx.clone()], last_hash);
+
+            let mut query = pg_pool.begin().await?;
+
+            let result = {
+                Block::save_to_db(&block, &mut query).await?;
+                Transaction::save_to_db(&tx, block.index, &mut query).await?;
+                Ledger::apply_transaction(&tx, &mut query).await?;
+
+                Ok::<(), Box<dyn std::error::Error>>(())
+            };
+
+            // Insert
+            match result {
+                Ok(_) => {
+                    query.commit().await?;
+                    Log::info_msg(
+                        "Blockchain::Transaction",
+                        "send",
+                        "Transaction successfully completed",
+                    );
+                }
+                Err(e) => {
+                    query.rollback().await.ok();
+                    Log::error_msg("Blockchain::Transaction", "send", &format!("Error: {}", e));
+                    return Err(e);
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Saves the transaction(s) in the database if the entire transaction was successful
@@ -643,6 +753,71 @@ impl Transaction {
             );
             "".to_string()
         }
+    }
+
+    /// Give free tokens for test
+    pub async fn givetokens(
+        pool: &PgPool,
+        address: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let already_received: Option<String> = Utils::with_timeout(
+            sqlx::query_scalar!(
+                r#"
+                    SELECT address FROM core.givetokens WHERE address = $1
+                "#,
+                address
+            )
+            .fetch_optional(pool),
+            30,
+        )
+        .await?;
+
+        if already_received.is_some() {
+            return Err("This address has already received test tokens".into());
+        }
+
+        let public_sale_secret = VaultService::get_owner_secret(&"PUBLIC_SALE".to_string()).await?;
+
+        let transaction = Transaction::send(
+            &Wallet::add_prefix(&public_sale_secret.public_key),
+            address,
+            200f64,
+            &public_sale_secret.dh_public,
+            &public_sale_secret.dh_secret,
+            &&public_sale_secret.private_key,
+            &"Airdrop test".to_string(),
+            &pool,
+        )
+        .await;
+
+        match transaction {
+            Ok(_) => {
+                Log::info_msg(
+                    "Blockchain::Transaction",
+                    "givetokens",
+                    "Givetokens successful",
+                );
+            }
+            Err(_e) => Log::error_msg(
+                "Blockchain::Transaction",
+                "givetokens",
+                "Transaction failed",
+            ),
+        }
+
+        Utils::with_timeout(
+            sqlx::query!(
+                r#"
+            INSERT INTO core.givetokens (address) VALUES ($1)
+            "#,
+                address
+            )
+            .execute(pool),
+            30,
+        )
+        .await?;
+
+        Ok(())
     }
 }
 

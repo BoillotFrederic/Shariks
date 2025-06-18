@@ -134,13 +134,6 @@ async fn main() -> Result<(), sqlx::Error> {
 
                 let message = format!("{}{}{}{}{}", sender, recipient, amount, memo, Utc::now());
                 let signature = Encryption::sign_message(private_key.clone(), message.clone());
-                // let signature = Encryption::sign_transaction(
-                //     private_key,
-                //     sender.clone(),
-                //     recipient.clone(),
-                //     amount,
-                //     memo.clone(),
-                // );
 
                 if let Some(tx) = blockchain::Transaction::create(
                     &sender,

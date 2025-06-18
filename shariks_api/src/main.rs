@@ -88,8 +88,18 @@ async fn main() -> io::Result<()> {
                 "/wallet/get_transactions",
                 web::post().to(Handler::get_transactions),
             )
-            .route("/view_blocks", web::get().to(Handler::view_blocks))
-            .route("/block/latest", web::get().to(Handler::latest_block))
+            // Get official wallets
+            .route(
+                "/wallet/official",
+                web::get().to(Handler::get_official_wallets),
+            )
+            // Give tokens
+            .route(
+                "/wallet/givetokens/{address}",
+                web::get().to(Handler::givetokens),
+            )
+        // .route("/view_blocks", web::get().to(Handler::view_blocks))
+        // .route("/block/latest", web::get().to(Handler::latest_block))
         // .route(
         //     "/wallet/{address}/balance",
         //     web::get().to(Handler::wallet_balance),

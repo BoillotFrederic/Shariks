@@ -198,14 +198,6 @@ impl Genesis {
                     message.clone(),
                 );
 
-                // let signature = Encryption::sign_transaction(
-                //     public_sale_secret.private_key.clone(),
-                //     public_sale_address.clone(),
-                //     recipient.clone(),
-                //     amount,
-                //     "Initial distribution".to_string(),
-                // );
-
                 // Transaction
                 if let Some(tx) = blockchain::Transaction::create(
                     &public_sale_address,
