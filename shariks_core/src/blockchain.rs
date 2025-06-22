@@ -5,13 +5,14 @@
 //! enforces transaction validation rules, and handles block addition.
 
 // Dependencies
-//use futures::StreamExt;
 use base64::Engine;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json;
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, Row, Transaction as QuerySync};
+use std::fs::OpenOptions;
+use std::io::Write;
 use uuid::Uuid;
 
 // Crates
@@ -38,6 +39,10 @@ pub const PERCENT_BASE: u64 = 100_000;
 pub const FEE_RATE: u64 = 1_000;
 pub const FEE_MAX: u64 = 100 * NANOSRKS_PER_SRKS;
 pub const PREFIX_ADDRESS: &str = "SRKS_";
+const FOUNDER_INDEX: usize = 0;
+const TREASURY_INDEX: usize = 1;
+const STAKING_INDEX: usize = 2;
+const REFERRAL_INDEX: usize = 3;
 
 // Block
 // -----
@@ -550,16 +555,16 @@ impl Transaction {
         })?;
 
         let mut result = vec![
-            (founder_address.clone(), shares[0]),
-            (public_sale_address, shares[1]),
-            (staking_address, shares[2]),
+            (founder_address.clone(), shares[FOUNDER_INDEX]),
+            (public_sale_address, shares[TREASURY_INDEX]),
+            (staking_address, shares[STAKING_INDEX]),
         ];
 
         // Check referrer
         if !referrer_wallet.is_empty() {
-            result.push((referrer_wallet, shares[3]));
+            result.push((referrer_wallet, shares[REFERRAL_INDEX]));
         } else {
-            result.push((founder_address, shares[3]));
+            result.push((founder_address, shares[REFERRAL_INDEX]));
         }
 
         Ok(result)
@@ -898,15 +903,68 @@ pub async fn load_blocks_from_db(pg_pool: &PgPool) -> Result<Vec<Block>, sqlx::E
 }
 
 /// Check and fix ledger with blockchain reading
-pub async fn verify_and_resync_ledger(pg_pool: &PgPool) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn verify_ledger(pg_pool: &PgPool) -> Result<(), Box<dyn std::error::Error>> {
+    // Open log
+    let mut log_file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("ledger.log")?;
+
+    let timestamp = Utc::now().to_rfc3339();
+    writeln!(log_file, "")?;
+    writeln!(log_file, "[{}] Start verify ledger", timestamp)?;
+
+    // Get wallets
+    let public_sale_address = Utils::read_from_file("owners/PUBLIC_SALE").map_err(|e| {
+        Log::error(
+            "Blockchain",
+            "verify_and_resync_ledger",
+            "PUBLIC_SALE",
+            &e.to_string(),
+        );
+        e
+    })?;
+
+    let founder_address = Utils::read_from_file("owners/FOUNDER").map_err(|e| {
+        Log::error(
+            "Blockchain",
+            "verify_and_resync_ledger",
+            "FOUNDER",
+            &e.to_string(),
+        );
+        e
+    })?;
+
+    let staking_address = Utils::read_from_file("owners/STAKING").map_err(|e| {
+        Log::error(
+            "Blockchain",
+            "verify_and_resync_ledger",
+            "STAKING",
+            &e.to_string(),
+        );
+        e
+    })?;
+
     // Create a ledger temp table
+    Utils::with_timeout(
+        sqlx::query!(
+            r#"
+            CREATE TABLE IF NOT EXISTS snapshot.tmp_ledger_sync (
+                address TEXT PRIMARY KEY,
+                balance BIGINT NOT NULL DEFAULT 0
+            )
+            "#,
+        )
+        .execute(pg_pool),
+        120,
+    )
+    .await?;
+
+    // Clean table
     Utils::with_timeout(
         sqlx::query(
             r#"
-            CREATE TEMP TABLE tmp_ledger_sync (
-                address TEXT PRIMARY KEY,
-                balance BIGINT NOT NULL DEFAULT 0
-            ) ON COMMIT DROP;
+             TRUNCATE snapshot.tmp_ledger_sync
             "#,
         )
         .execute(pg_pool),
@@ -928,7 +986,8 @@ pub async fn verify_and_resync_ledger(pg_pool: &PgPool) -> Result<(), Box<dyn st
         let block = row?;
         let tx_stream = sqlx::query!(
             r#"
-            SELECT sender, recipient, amount
+            SELECT referrer, sender, recipient, amount, fee,
+            fee_founder, fee_staking, fee_referral, fee_treasury
             FROM core.transactions
             WHERE block_index = $1
             "#,
@@ -939,22 +998,67 @@ pub async fn verify_and_resync_ledger(pg_pool: &PgPool) -> Result<(), Box<dyn st
         tokio::pin!(tx_stream);
 
         while let Some(tx_row) = Utils::with_timeout_next(&mut tx_stream, 120).await? {
+            // Params
             let tx = tx_row?;
+            let referrer = tx.referrer.unwrap_or("".to_string());
             let amount = tx.amount.max(0) as i64;
+            let fee = tx.fee as i64;
+
+            // Distribution fees
+            let percentages = [
+                tx.fee_founder as u64,
+                tx.fee_treasury as u64,
+                tx.fee_staking as u64,
+                tx.fee_referral as u64,
+            ];
+
+            let shares = Transaction::split_fee_exact(fee as u64, &percentages);
+
+            let mut result = vec![
+                (&founder_address, shares[FOUNDER_INDEX]),
+                (&public_sale_address, shares[TREASURY_INDEX]),
+                (&staking_address, shares[STAKING_INDEX]),
+            ];
+
+            if !referrer.is_empty() {
+                result.push((&referrer, shares[REFERRAL_INDEX]));
+            } else {
+                result.push((&founder_address, shares[REFERRAL_INDEX]));
+            }
+
+            for (address, fee_amount) in result {
+                if !address.is_empty() && fee_amount > 0 {
+                    Utils::with_timeout(
+                        sqlx::query(
+                            r#"
+                            INSERT INTO snapshot.tmp_ledger_sync (address, balance)
+                            VALUES ($1, $2)
+                            ON CONFLICT (address)
+                            DO UPDATE SET balance = snapshot.tmp_ledger_sync.balance + $2
+                            "#,
+                        )
+                        .bind(address)
+                        .bind(fee_amount as i64)
+                        .execute(pg_pool),
+                        120,
+                    )
+                    .await?;
+                }
+            }
 
             // Deduce from sender (except SRKS_GENESIS)
-            if tx.sender != "SRKS_GENESIS" {
+            if !tx.sender.is_empty() && tx.sender != "SRKS_GENESIS" {
                 Utils::with_timeout(
                     sqlx::query(
                         r#"
-                        INSERT INTO tmp_ledger_sync (address, balance)
+                        INSERT INTO snapshot.tmp_ledger_sync(address, balance)
                         VALUES ($1, -$2)
                         ON CONFLICT (address)
-                        DO UPDATE SET balance = tmp_ledger_sync.balance - $2
+                        DO UPDATE SET balance = snapshot.tmp_ledger_sync.balance - $2
                         "#,
                     )
                     .bind(&tx.sender)
-                    .bind(amount)
+                    .bind(amount + fee)
                     .execute(pg_pool),
                     120,
                 )
@@ -965,10 +1069,10 @@ pub async fn verify_and_resync_ledger(pg_pool: &PgPool) -> Result<(), Box<dyn st
             Utils::with_timeout(
                 sqlx::query(
                     r#"
-                    INSERT INTO tmp_ledger_sync (address, balance)
+                    INSERT INTO snapshot.tmp_ledger_sync (address, balance)
                     VALUES ($1, $2)
                     ON CONFLICT (address)
-                    DO UPDATE SET balance = tmp_ledger_sync.balance + $2
+                    DO UPDATE SET balance = snapshot.tmp_ledger_sync.balance + $2
                     "#,
                 )
                 .bind(&tx.recipient)
@@ -978,16 +1082,16 @@ pub async fn verify_and_resync_ledger(pg_pool: &PgPool) -> Result<(), Box<dyn st
             )
             .await?;
         }
+        drop(tx_stream);
     }
+    drop(block_stream);
 
     // Checking balances
-    let mut desync_count = 0;
-
     let mut real_ledger = sqlx::query(
         r#"
         SELECT wl.address, wl.balance, COALESCE(tmp.balance, 0) AS expected
         FROM core.wallet_balances wl
-        LEFT JOIN tmp_ledger_sync tmp ON wl.address = tmp.address
+        LEFT JOIN snapshot.tmp_ledger_sync tmp ON wl.address = tmp.address
         "#,
     )
     .fetch(pg_pool);
@@ -999,56 +1103,25 @@ pub async fn verify_and_resync_ledger(pg_pool: &PgPool) -> Result<(), Box<dyn st
         let expected: i64 = r.get("expected");
 
         if balance != expected {
-            Log::error_msg(
-                "Blockchain",
-                "verify_and_resync_ledger",
-                &format!(
-                    "Desynchronization : {} → real = {}, expected = {}",
-                    address, balance, expected
-                ),
-            );
-            desync_count += 1;
+            writeln!(
+                log_file,
+                "Desynchronization: {} → real = {}, expected = {}",
+                address, balance, expected
+            )?;
         }
     }
-
-    if desync_count == 0 {
-        Log::info_msg(
-            "Blockchain",
-            "verify_and_resync_ledger",
-            "Ledger perfectly synchronized",
-        );
-    } else {
-        Log::error_msg(
-            "Blockchain",
-            "verify_and_resync_ledger",
-            &format!("{} desynchronizations detected", desync_count),
-        );
-    }
-
-    // Fix all desynchronizations
-    if desync_count > 0 {
-        Utils::with_timeout(
-            sqlx::query(
-                r#"
-                UPDATE core.wallet_balances wl
-                SET balance = tmp.balance
-                FROM tmp_ledger_sync tmp
-                WHERE wl.address = tmp.address AND wl.balance != tmp.balance
-                "#,
-            )
-            .execute(pg_pool),
-            120,
-        )
-        .await?;
-    }
+    drop(real_ledger);
 
     // Drop table temp
     Utils::with_timeout(
-        sqlx::query("DROP TABLE IF EXISTS tmp_ledger_sync;").execute(pg_pool),
+        sqlx::query("DROP TABLE IF EXISTS snapshot.tmp_ledger_sync;").execute(pg_pool),
         120,
     )
     .await?;
 
+    // End check
+    writeln!(log_file, "End verify ledger")?;
+    drop(log_file);
     Ok(())
 }
 

@@ -311,26 +311,14 @@ async fn main() -> Result<(), sqlx::Error> {
                     }
                 });
             }
-            // CLI - check and fix ledger with blockchain reading
+            // CLI - check ledger with blockchain reading
             "11" => {
                 Log::info_msg("Main", "main", "Check and fix Ledger");
                 let pg_pool_clone = pg_pool.clone();
-                tokio::task::spawn_blocking(move || {
-                    let rt = match tokio::runtime::Runtime::new() {
-                        Ok(runtime) => runtime,
-                        Err(e) => {
-                            Log::error("Main", "main", "Failed to create runtime", e);
-                            return;
-                        }
-                    };
-
-                    let result = rt.block_on(blockchain::verify_and_resync_ledger(&pg_pool_clone));
-                    match result {
-                        Ok(_) => Log::info_msg("Main", "main", "Check and fix Ledger finished"),
-                        Err(e) => {
-                            Log::error("Main", "main", "Check and fix ledger failed", e);
-                            return;
-                        }
+                tokio::spawn(async move {
+                    match blockchain::verify_ledger(&pg_pool_clone).await {
+                        Ok(_) => Log::info_msg("Main", "main", "Ledger check done"),
+                        Err(e) => Log::error("Main", "main", "Ledger check failed", e),
                     }
                 });
             }
