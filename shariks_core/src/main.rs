@@ -21,7 +21,6 @@ use shariks_core::ledger::*;
 use shariks_core::log::*;
 use shariks_core::staking::*;
 use shariks_core::utils::*;
-use shariks_core::vault;
 use shariks_core::vault::*;
 use shariks_core::wallet::*;
 use sqlx::PgPool;
@@ -68,13 +67,12 @@ async fn main() -> Result<(), sqlx::Error> {
         println!("5. Check total supply");
         println!("6. View keypair with mnemonic");
         println!("7. Wallets list");
-        println!("8. Decrypt memo");
+        println!("8. Make & snapshot day");
         println!("9. Fake insert for token distribution test (coming soon)");
         println!("10. Distribute staking wallet for the last month");
-        println!("11. Check and fix ledger with blockchain reading");
-        println!("12. Write secret wallet");
-        println!("13. Read secret vault");
-        println!("14. Quit");
+        println!("11. Check ledger with blockchain reading");
+        println!("12. Read secret vault");
+        println!("13. Quit");
 
         let mut choice = String::new();
 
@@ -265,16 +263,9 @@ async fn main() -> Result<(), sqlx::Error> {
                     continue;
                 }
             }
-            // CLI - Decrypt a memo
+            // CLI - Snapshot day
             "8" => {
-                Log::info_msg("Main", "main", "Decrypt a memo");
-                let memo = Utils::prompt("Memo : ");
-                let dh_public = Utils::prompt("DH public : ");
-                let dh_secret = Utils::prompt_secret("DH secret : ");
-
-                let memo_decrypted =
-                    blockchain::Transaction::decrypt_memo(&memo, &dh_secret, &dh_public);
-                println!("{}", memo_decrypted);
+                Log::info_msg("Main", "main", "Make a snapshot day");
             }
             // CLI - fake insert for token distribution test (coming soon)
             "9" => {
@@ -322,39 +313,18 @@ async fn main() -> Result<(), sqlx::Error> {
                     }
                 });
             }
-            // CLI - write a secret wallet
-            "12" => {
-                Log::info_msg("Main", "main", "Write a secret wallet");
-                let wallet_secret = vault::WalletSecret {
-                    mnemonic: "mnemonic test".to_string(),
-                    passphrase: "passphrase test".to_string(),
-                    public_key: "public_key test".to_string(),
-                    private_key: "private_key test".to_string(),
-                    dh_public: "dh_public test".to_string(),
-                    dh_secret: "dh_secret test".to_string(),
-                };
-                match VaultService::set_owner_secret("Test", wallet_secret).await {
-                    Ok(()) => {
-                        println!("OK");
-                    }
-                    Err(e) => {
-                        Log::error("Main", "main", "Write secret failed", e);
-                        continue;
-                    }
-                };
-            }
             // CLI - read a secret wallet
-            "13" => {
+            "12" => {
                 Log::info_msg("Main", "main", "Read a secret wallet");
                 let name = Utils::prompt("Name : ");
                 match VaultService::get_owner_secret(&name).await {
                     Ok(secret) => {
-                        println!("{}", secret.mnemonic);
-                        println!("{}", secret.passphrase);
-                        println!("{}", secret.public_key);
-                        println!("{}", secret.private_key);
-                        println!("{}", secret.dh_public);
-                        println!("{}", secret.dh_secret);
+                        let _ = Utils::secret_println(&secret.mnemonic);
+                        let _ = Utils::secret_println(&secret.passphrase);
+                        let _ = Utils::secret_println(&secret.public_key);
+                        let _ = Utils::secret_println(&secret.private_key);
+                        let _ = Utils::secret_println(&secret.dh_public);
+                        let _ = Utils::secret_println(&secret.dh_secret);
                     }
                     Err(e) => {
                         Log::error("Main", "main", "Read secret failed", e);
@@ -363,7 +333,7 @@ async fn main() -> Result<(), sqlx::Error> {
                 };
             }
             // CLI - quit
-            "14" => {
+            "13" => {
                 Log::info_msg("Main", "main", "Quit");
                 break;
             }

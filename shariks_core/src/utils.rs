@@ -10,7 +10,7 @@ use rpassword::read_password;
 use std::fs;
 use std::fs::File;
 use std::fs::OpenOptions;
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Result as IoResult, Write};
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time;
@@ -85,6 +85,25 @@ impl Utils {
         tokio::time::timeout(Duration::from_secs(secs), stream.next())
             .await
             .map_err(|_| "Timeout")
+    }
+
+    /// Write secret text in the console
+    pub fn secret_println(msg: &str) -> IoResult<()> {
+        #[cfg(unix)]
+        {
+            use std::fs::OpenOptions;
+            let mut tty = OpenOptions::new().write(true).open("/dev/tty")?;
+            writeln!(tty, "{}", msg)?;
+        }
+
+        #[cfg(windows)]
+        {
+            use std::io::{BufWriter, stdout};
+            let mut out = BufWriter::new(stdout());
+            writeln!(out, "{}", msg)?;
+        }
+
+        Ok(())
     }
 
     /// Increment a file
