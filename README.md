@@ -4,7 +4,7 @@
 Shariks Chain is a next-generation blockchain developed in Rust, designed to be lightweight, eco-friendly, and community-driven. It relies on a hybrid mechanism combining Proof of Stake (PoS) and Proof of Relay (PoR).
 
 ## Vision
-To build a fully sovereign network, resource-efficient, without Proof of Work, where rewards are redistributed to the community based on actual participation — with no minting or burning of tokens.
+To build a fully sovereign network, resource-efficient, without Proof of Work, where rewards are redistributed to the community based on actual participation - with no minting or burning of tokens.
 
 ---
 
@@ -76,7 +76,7 @@ A system to reassign inactive funds after 20 years is being considered. The goal
 
 ## Other Principles
 - **No token burn**: no tokens are ever destroyed.
-- **No infinite minting**: supply is **fixed** at genesis — no additional tokens will ever be created.
+- **No infinite minting**: supply is **fixed** at genesis - no additional tokens will ever be created.
 
 ---
 

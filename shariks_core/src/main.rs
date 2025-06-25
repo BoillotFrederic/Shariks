@@ -12,8 +12,6 @@
 // Copyright © : 2025
 
 // Dependencies
-use base64::Engine;
-use chrono::Utc;
 use shariks_core::blockchain;
 use shariks_core::encryption::*;
 use shariks_core::genesis::*;
@@ -87,97 +85,29 @@ async fn main() -> Result<(), sqlx::Error> {
                 Log::info_msg("Main", "main", "Create a new transaction");
                 let sender = Utils::prompt("Sender :");
                 let recipient = Utils::prompt("Recipient :");
-                let amount: u64 = blockchain::to_nanosrks(
-                    Utils::prompt("Amount :").trim().parse().unwrap_or(0.0),
-                );
+                let amount: f64 = Utils::prompt("Amount :").trim().parse().unwrap_or(0.0);
                 let sender_dh_public_str = Utils::prompt("Public DH :");
                 let sender_dh_secret_str = Utils::prompt_secret("Secret DH :");
                 let private_key = Utils::prompt_secret("Private key :");
-
-                // Memo
-                let (recipient_dh_public_str, recipient_dh_public_opt) =
-                    Encryption::get_dh_public_key_data_by_address(&pg_pool, &recipient).await?;
-
-                let recipient_dh_public = match recipient_dh_public_opt {
-                    Some(key) => key,
-                    None => {
-                        Log::error_msg("Main", "main", "Get DH public failed");
-                        continue;
-                    }
-                };
-
-                let sender_dh_secret = match Encryption::hex_to_static_secret(&sender_dh_secret_str)
-                {
-                    Some(secret) => secret,
-                    None => {
-                        Log::error_msg("Main", "main", "Convert DH secret failed");
-                        continue;
-                    }
-                };
                 let memo_input = Utils::prompt("Memo :");
-                let memo_input_truncated = &memo_input[..memo_input.len().min(255)];
-                let (encrypted_memo, nonce) = Encryption::encrypt_message(
-                    &sender_dh_secret,
-                    &recipient_dh_public,
-                    &memo_input_truncated,
-                );
 
-                let nonce_encoded = base64::engine::general_purpose::STANDARD.encode(nonce);
-
-                let memo = if encrypted_memo.is_empty() {
-                    "".to_string()
-                } else {
-                    format!("{}:{}", encrypted_memo, nonce_encoded)
-                };
-
-                let message = format!("{}{}{}{}{}", sender, recipient, amount, memo, Utc::now());
-                let signature = Encryption::sign_message(private_key.clone(), message.clone());
-
-                if let Some(tx) = blockchain::Transaction::create(
+                match blockchain::Transaction::send(
                     &sender,
                     &recipient,
                     amount,
                     &sender_dh_public_str,
-                    &recipient_dh_public_str,
-                    &memo,
-                    &signature,
-                    &message,
+                    &sender_dh_secret_str,
+                    &private_key,
+                    &memo_input,
                     &pg_pool,
                 )
                 .await
                 {
-                    let (last_index, last_hash) =
-                        blockchain::Block::get_last_block_meta(&pg_pool).await?;
-                    let block = blockchain::Block::new(last_index + 1, vec![tx.clone()], last_hash);
-
-                    // Finalize transaction
-                    let mut query_sync = pg_pool.begin().await?;
-
-                    let result = {
-                        blockchain::Block::save_to_db(&block, &mut query_sync).await?;
-                        blockchain::Transaction::save_to_db(&tx, block.index, &mut query_sync)
-                            .await?;
-                        Ledger::apply_transaction(&tx, &mut query_sync).await?;
-
-                        Ok::<(), Box<dyn std::error::Error>>(())
-                    };
-
-                    match result {
-                        Ok(_) => {
-                            query_sync.commit().await?;
-
-                            Log::info_msg(
-                                "Main",
-                                "main",
-                                "The transaction was successfully completed",
-                            );
-                        }
-                        Err(_e) => {
-                            query_sync.rollback().await.ok();
-                            continue;
-                        }
+                    Ok(()) => {}
+                    Err(e) => {
+                        Log::error_msg("Main", "main", &format!("Error: {}", e));
                     }
-                }
+                };
             }
             // CLI - create a new wallet
             "2" => {
@@ -266,6 +196,7 @@ async fn main() -> Result<(), sqlx::Error> {
             // CLI - Snapshot day
             "8" => {
                 Log::info_msg("Main", "main", "Make a snapshot day");
+                continue;
             }
             // CLI - fake insert for token distribution test (coming soon)
             "9" => {
