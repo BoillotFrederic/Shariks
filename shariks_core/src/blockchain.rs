@@ -23,6 +23,9 @@ use crate::utils::Utils;
 use crate::vault::*;
 use crate::wallet::*;
 
+// Types
+type DynError = Box<dyn std::error::Error>;
+
 /// Defines the format of a fee rule
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeeRule {
@@ -903,7 +906,7 @@ pub async fn load_blocks_from_db(pg_pool: &PgPool) -> Result<Vec<Block>, sqlx::E
 }
 
 /// Check and fix ledger with blockchain reading
-pub async fn verify_ledger(pg_pool: &PgPool) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn verify_ledger(pg_pool: &PgPool) -> Result<(), DynError> {
     // Open log
     let mut log_file = OpenOptions::new()
         .create(true)

@@ -66,11 +66,12 @@ async fn main() -> Result<(), sqlx::Error> {
         println!("6. View keypair with mnemonic");
         println!("7. Wallets list");
         println!("8. Make a snapshot day");
-        println!("9. Fake insert for token distribution test (coming soon)");
-        println!("10. Distribute staking wallet for the last month");
-        println!("11. Check ledger with blockchain reading");
-        println!("12. Read secret vault");
-        println!("13. Quit");
+        println!("9. Clear the staking month snapshots");
+        println!("10. Fake insert for token distribution test (coming soon)");
+        println!("11. Distribute staking wallet for the last month");
+        println!("12. Check ledger with blockchain reading");
+        println!("13. Read secret vault");
+        println!("14. Quit");
 
         let mut choice = String::new();
 
@@ -105,7 +106,7 @@ async fn main() -> Result<(), sqlx::Error> {
                 {
                     Ok(()) => {}
                     Err(e) => {
-                        Log::error_msg("Main", "main", &format!("Error: {}", e));
+                        Log::error("Main", "main", "Add transaction", e);
                     }
                 };
             }
@@ -193,48 +194,58 @@ async fn main() -> Result<(), sqlx::Error> {
                     continue;
                 }
             }
-            // CLI - Snapshot day
+            // CLI - Make a snapshot day
             "8" => {
                 Log::info_msg("Main", "main", "Make a snapshot day");
+
+                match Staking::snapshot_day(&pg_pool).await {
+                    Ok(()) => {
+                        Log::info_msg("Main", "main", "Snapshot day has been created");
+                    }
+                    Err(e) => {
+                        Log::error("Main", "main", "Male a snapshot day", e);
+                    }
+                };
+
                 continue;
             }
-            // CLI - fake insert for token distribution test (coming soon)
+            // CLI - Clear the staking month snapshots
             "9" => {
+                Log::info_msg("Main", "main", "Purge staking scores");
+
+                match Staking::purge_staking_scores_for_month(&pg_pool).await {
+                    Ok(()) => {
+                        Log::info_msg("Main", "main", "Table staking_scores emptied");
+                    }
+                    Err(e) => {
+                        Log::error("Main", "main", "Purge staking scores", e);
+                    }
+                };
+
+                continue;
+            }
+            // CLI - fake insert for token distribution test
+            "10" => {
                 Log::info_msg("Main", "main", "fake insert for token distribution test");
                 continue;
             }
 
             // CLI - distribute staking wallet for the last month
-            "10" => {
+            "11" => {
                 Log::info_msg("Main", "main", "Distribute staking wallet");
                 let pg_pool_clone = pg_pool.clone();
-                tokio::task::spawn_blocking(move || {
-                    let rt = match tokio::runtime::Runtime::new() {
-                        Ok(runtime) => runtime,
-                        Err(e) => {
-                            Log::error("Main", "main", "Failed to create runtime", e);
-                            return;
-                        }
-                    };
-                    let result = rt.block_on(Staking::execute_monthly_staking_distribution(
-                        &pg_pool_clone,
-                    ));
-
-                    match result {
-                        Ok(_) => Log::info_msg(
-                            "Main",
-                            "main",
-                            "Staking distribution finished successfully",
-                        ),
-                        Err(e) => {
-                            Log::error("Main", "main", "Staking distribution failed", e);
-                            return;
-                        }
+                tokio::spawn(async move {
+                    if let Err(_) =
+                        Staking::execute_monthly_staking_distribution(&pg_pool_clone).await
+                    {
+                        Log::error_msg("Main", "main", "Staking distribution failed");
+                    } else {
+                        Log::info_msg("Main", "main", "Staking distribution finished successfully");
                     }
                 });
             }
             // CLI - check ledger with blockchain reading
-            "11" => {
+            "12" => {
                 Log::info_msg("Main", "main", "Check and fix Ledger");
                 let pg_pool_clone = pg_pool.clone();
                 tokio::spawn(async move {
@@ -245,7 +256,7 @@ async fn main() -> Result<(), sqlx::Error> {
                 });
             }
             // CLI - read a secret wallet
-            "12" => {
+            "13" => {
                 Log::info_msg("Main", "main", "Read a secret wallet");
                 let name = Utils::prompt("Name : ");
                 match VaultService::get_owner_secret(&name).await {
@@ -264,7 +275,7 @@ async fn main() -> Result<(), sqlx::Error> {
                 };
             }
             // CLI - quit
-            "13" => {
+            "14" => {
                 Log::info_msg("Main", "main", "Quit");
                 break;
             }

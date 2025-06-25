@@ -31,7 +31,7 @@
 // Dependencies
 use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::{PgPool, Row, Transaction as QuerySync};
+use sqlx::{PgPool, Row};
 
 // Crates
 use crate::blockchain::*;
@@ -101,18 +101,23 @@ impl Staking {
 
             // Set
             while let Some(row) = Utils::with_timeout_next(&mut stream, 30).await? {
-                let row = row?;
+                let row = match row {
+                    Ok(r) => r,
+                    Err(_) => {
+                        continue;
+                    }
+                };
                 let address: String = row.get("address");
                 let balance: i64 = row.get("balance");
                 let score = (balance as u64).min(STAKING_CAP);
 
-                Utils::with_timeout(
+                match Utils::with_timeout(
                     sqlx::query!(
                         r#"
                         INSERT INTO core.staking_scores (address, score)
                         VALUES ($1, $2)
                         ON CONFLICT (address)
-                        DO UPDATE SET score = staking_scores.score + $2
+                        DO UPDATE SET score = core.staking_scores.score + $2
                         "#,
                         address,
                         score as i64
@@ -120,7 +125,13 @@ impl Staking {
                     .execute(pg_pool),
                     30,
                 )
-                .await?;
+                .await
+                {
+                    Ok(_t) => {}
+                    Err(e) => {
+                        Log::error("Staking", "calculate_scores", "Query error", e);
+                    }
+                };
             }
 
             current_day += Duration::days(1);
@@ -135,7 +146,7 @@ impl Staking {
         pg_pool: &PgPool,
         staking_wallet: &str,
         staking_private_key: &str,
-    ) -> Result<(), DynError> {
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // Get total score
         let value: Option<i64> = Utils::with_timeout(
             sqlx::query_scalar!(
@@ -228,12 +239,13 @@ impl Staking {
         pg_pool: &PgPool,
         transactions: &[Transaction],
         addresses: &[String],
-    ) -> Result<(), DynError> {
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let (last_index, last_hash) = Block::get_last_block_meta(pg_pool).await?;
         let block = Block::new(last_index + 1, transactions.to_vec(), last_hash);
-        let mut tx: QuerySync<'_, sqlx::Postgres> = pg_pool.begin().await?;
 
-        let result = {
+        let mut tx = pg_pool.begin().await?;
+
+        if let Err(e) = async {
             Block::save_to_db(&block, &mut tx).await?;
 
             for tx_obj in transactions {
@@ -257,19 +269,16 @@ impl Staking {
                 .await?;
             }
 
-            Ok::<(), Box<dyn std::error::Error>>(())
-        };
-
-        match result {
-            Ok(_) => {
-                tx.commit().await?;
-                Ok(())
-            }
-            Err(e) => {
-                tx.rollback().await.ok();
-                Err(e)
-            }
+            Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
         }
+        .await
+        {
+            tx.rollback().await.ok();
+            return Err(e);
+        }
+
+        tx.commit().await?;
+        Ok(())
     }
 
     /// Start disritution of staking token for the last month
@@ -319,15 +328,27 @@ impl Staking {
         let staking_secret = VaultService::get_owner_secret(&"STAKING".to_string()).await?;
         let staking_address = Wallet::add_prefix(&staking_secret.public_key);
         let staking_private_key = staking_secret.private_key;
-        Self::generate_distribution(pg_pool, &staking_address, &staking_private_key).await?;
+        match Self::generate_distribution(pg_pool, &staking_address, &staking_private_key).await {
+            Ok(()) => {}
+            Err(e) => {
+                Log::error(
+                    "Staking",
+                    "execute_monthly_staking_distribution",
+                    "Generate distribution",
+                    e,
+                );
+            }
+        };
 
         // Clear
         Self::purge_staking_scores_for_month(pg_pool).await?;
 
+        println!("test");
+
         Ok(())
     }
 
-    /// Clear the staking month tables
+    /// Clear the staking month snapshots
     pub async fn purge_staking_scores_for_month(pg_pool: &PgPool) -> Result<(), DynError> {
         // Drop snapshot day tables
         for day in 1..=31 {
@@ -343,17 +364,10 @@ impl Staking {
             30,
         )
         .await?;
-
-        Log::info_msg(
-            "Staking",
-            "purge_staking_scores_for_month",
-            "Table staking_scores emptied",
-        );
         Ok(())
     }
 
     /// Take a snapshot of wallet balances
-    #[allow(unused)]
     pub async fn snapshot_day(pg_pool: &PgPool) -> Result<(), DynError> {
         // Day to string
         let yesterday = Utc::now() - Duration::days(1);
@@ -369,49 +383,7 @@ impl Staking {
             snapshot_table
         );
         Utils::with_timeout(sqlx::query(&sql).execute(pg_pool), 90).await?;
-
-        Log::info_msg("Staking", "snapshot_day", "Snapshot day has been created");
         Ok(())
-    }
-
-    // Delete a snapshot
-    #[allow(unused)]
-    pub async fn delete_snapshot(pg_pool: &PgPool, table_name: i32) -> Result<(), DynError> {
-        let sql = format!("DROP TABLE IF EXISTS {};", table_name);
-        Utils::with_timeout(sqlx::query(&sql).execute(pg_pool), 30).await?;
-
-        Log::info_msg("Staking", "delete_snapshot", "Snapshot has been deleted");
-        Ok(())
-    }
-
-    /// Return a number days in month
-    #[allow(unused)]
-    fn num_days_in_month(year: i32, month: u32) -> u32 {
-        fn is_leap_year(year: i32) -> bool {
-            (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
-        }
-
-        match month {
-            1 => 31,
-            2 => {
-                if is_leap_year(year) {
-                    29
-                } else {
-                    28
-                }
-            }
-            3 => 31,
-            4 => 30,
-            5 => 31,
-            6 => 30,
-            7 => 31,
-            8 => 31,
-            9 => 30,
-            10 => 31,
-            11 => 30,
-            12 => 31,
-            _ => 30,
-        }
     }
 
     // Return the last day of month
