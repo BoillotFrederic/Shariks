@@ -67,7 +67,7 @@ async fn main() -> Result<(), sqlx::Error> {
         println!("5. Check total supply");
         println!("6. View keypair with mnemonic");
         println!("7. Wallets list");
-        println!("8. Make & snapshot day");
+        println!("8. Make a snapshot day");
         println!("9. Fake insert for token distribution test (coming soon)");
         println!("10. Distribute staking wallet for the last month");
         println!("11. Check ledger with blockchain reading");

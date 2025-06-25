@@ -1,4 +1,103 @@
-# Shariks Chain - Whitepaper (v1.1 – mai 2025)
+# Shariks Chain – Whitepaper (English)
+
+## Introduction
+Shariks Chain is a next-generation blockchain developed in Rust, designed to be lightweight, eco-friendly, and community-driven. It relies on a hybrid mechanism combining Proof of Stake (PoS) and Proof of Relay (PoR).
+
+## Vision
+To build a fully sovereign network, resource-efficient, without Proof of Work, where rewards are redistributed to the community based on actual participation — with no minting or burning of tokens.
+
+---
+
+## Core Mechanisms
+
+### Proof of Relay (PoR)
+- Each wallet can sponsor new users.
+- The network rewards sponsorship: each transaction from a sponsored user generates rewards for their sponsor.
+- Timeless: as long as the sponsored user remains active, their sponsor continues to receive rewards.
+- **Sponsorship Bonus**: the first 100 sponsored users of any wallet generate +10% lifetime rewards for their sponsor.
+
+### Proof of Stake (PoS) – Automatic Staking
+- Any address holding tokens receives monthly "dividends" derived from transaction fees.
+- No magical token generation: rewards come **exclusively from collected fees**.
+- A ledger system accounts for the **exact holding time**, even with token movement, ensuring fair distribution (like a savings account).
+- Max stake cap: a maximum of 1,000,000 SRKS is considered per wallet when computing staking scores (to prevent domination).
+
+### Inactivity
+- If a wallet has **not connected to the network for over 1 year**, it **temporarily stops receiving** staking rewards.
+- Rewards resume from zero once the wallet becomes active again.
+
+---
+
+## Tokenomics & Fees
+
+### Total Supply
+- 100,000,000 SRKS tokens (100 million).
+
+### Initial Distribution
+- 80% for public sale (ICO or fair distribution).
+- 10% for sponsorship rewards (as a safeguard against bugs/exploits).
+- 10% for reserve/staking/dividends (as a safeguard against bugs/exploits).
+
+### Transaction Fees
+- **1%** per transaction.
+- **Cap**: cannot exceed **100 SRKS**  
+  (based on a projected value of 1 SRKS = $0.01, this cap will adjust dynamically to stay under $1).
+
+### Fee Distribution
+
+| Category           | Standard Distribution | If sender is among a sponsor’s first 100 referees |
+|--------------------|------------------------|--------------------------------------------------|
+| Sponsorship        | 20%                    | 30%                                             |
+| Founder/Infra      | 40%                    | 30%                                             |
+| Staking/Dividends  | 10%                    | 10%                                             |
+| Treasury           | 30%                    | 30%                                             |
+
+---
+
+## Ledger & Synchronization
+- Each wallet’s balance is recalculated in real time via a PostgreSQL database.
+- Every day:
+  - A daily snapshot is taken.
+  - A full consistency check is performed (hashes, balances, supply).
+- The system is designed to minimize RAM usage (streamed SQL, no Rust HashMaps).
+
+---
+
+## Experimental Mechanism: Expiration of Inactive Wallets  
+**This mechanism is currently under review and not active**
+
+A system to reassign inactive funds after 20 years is being considered. The goal is to re-inject lost or abandoned tokens back into the economy while ensuring:
+
+- Full transparency,
+- Advance notifications,
+- And if possible, post-expiration recovery options (ID proof, inheritance, etc.).
+
+---
+
+## Other Principles
+- **No token burn**: no tokens are ever destroyed.
+- **No infinite minting**: supply is **fixed** at genesis — no additional tokens will ever be created.
+
+---
+
+## Future Objectives
+- Add a transaction explorer.
+- Simple frontend to display balances, history, and sponsorship relationships.
+- Public API for third-party integrations.
+- Server + client architecture with actix-web + PostgreSQL.
+- Securing sensitive keys via HashiCorp Vault or external systems.
+
+---
+
+## Genesis Address
+The address `SRKS_genesis` holds all 100 million tokens at launch.  
+It is used to distribute tokens according to the logic described above.
+
+---
+---
+---
+
+# Shariks Chain - Whitepaper (Français)
 
 ## Introduction
 Shariks Chain est une blockchain de nouvelle génération développée en Rust, pensée pour être légère, écologique et résolument communautaire. Elle repose sur un mécanisme hybride combinant le Proof of Stake (PoS) et le Proof of Relay (PoR)
