@@ -1,6 +1,7 @@
 // Root modules
 pub mod blockchain;
 pub mod encryption;
+pub mod fake_insert;
 pub mod genesis;
 pub mod ledger;
 pub mod log;
