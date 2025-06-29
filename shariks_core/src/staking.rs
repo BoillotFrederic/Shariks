@@ -34,6 +34,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 
 // Crates
+use crate::blockchain;
 use crate::blockchain::*;
 use crate::encryption::*;
 use crate::ledger::*;
@@ -186,8 +187,8 @@ impl Staking {
             let score: i64 = row.get("score");
             let reward = ((score as f64 / total_score as f64) * staking_balance as f64) as u64;
 
-            if reward <= 0 {
-                return Ok(());
+            if reward <= blockchain::MIN_AMOUNT {
+                continue;
             }
 
             let message = format!(
@@ -342,8 +343,6 @@ impl Staking {
 
         // Clear
         Self::purge_staking_scores_for_month(pg_pool).await?;
-
-        println!("test");
 
         Ok(())
     }

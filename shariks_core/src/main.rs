@@ -14,6 +14,7 @@
 // Dependencies
 use shariks_core::blockchain;
 use shariks_core::encryption::*;
+use shariks_core::fake_insert::*;
 use shariks_core::genesis::*;
 use shariks_core::ledger::*;
 use shariks_core::log::*;
@@ -71,7 +72,8 @@ async fn main() -> Result<(), sqlx::Error> {
         println!("11. Distribute staking wallet for the last month");
         println!("12. Check ledger with blockchain reading");
         println!("13. Read secret vault");
-        println!("14. Quit");
+        println!("14. Insert fake wallets and transactions");
+        println!("15. Quit");
 
         let mut choice = String::new();
 
@@ -274,8 +276,38 @@ async fn main() -> Result<(), sqlx::Error> {
                     }
                 };
             }
-            // CLI - quit
+            // CLI - Insert fake wallets and transactions
             "14" => {
+                Log::info_msg("Main", "main", "Insert fake wallets and transactions");
+                let year = Utils::prompt("Year : ").trim().parse().unwrap_or(0);
+                let month = Utils::prompt("Month : ").trim().parse().unwrap_or(0);
+                let months_back = Utils::prompt("Month back : ").trim().parse().unwrap_or(0);
+                let amount = Utils::prompt("Amount : ").trim().parse().unwrap_or(0.0);
+                let count_wallet = Utils::prompt("Count wallet : ").trim().parse().unwrap_or(0);
+                let count_tx = Utils::prompt("Count transaction : ")
+                    .trim()
+                    .parse()
+                    .unwrap_or(0);
+
+                Log::info_msg("Main", "main", "Start fake insert");
+                Log::set_silent(true);
+
+                FakeInsert::insert_month(
+                    &pg_pool,
+                    year,
+                    month,
+                    months_back,
+                    blockchain::to_nanosrks(amount) as i64,
+                    count_wallet,
+                    count_tx,
+                )
+                .await;
+
+                Log::set_silent(false);
+                Log::info_msg("Main", "main", "End fake insert");
+            }
+            // CLI - quit
+            "15" => {
                 Log::info_msg("Main", "main", "Quit");
                 break;
             }

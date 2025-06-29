@@ -36,7 +36,7 @@ pub struct FeeRule {
 }
 
 // Globals
-const MIN_AMOUNT: u64 = 1000000;
+pub const MIN_AMOUNT: u64 = 1000000;
 pub const NANOSRKS_PER_SRKS: u64 = 1_000_000_000;
 pub const PERCENT_BASE: u64 = 100_000;
 pub const FEE_RATE: u64 = 1_000;
@@ -913,10 +913,6 @@ pub async fn verify_ledger(pg_pool: &PgPool) -> Result<(), DynError> {
         .append(true)
         .open("ledger.log")?;
 
-    let timestamp = Utc::now().to_rfc3339();
-    writeln!(log_file, "")?;
-    writeln!(log_file, "[{}] Start verify ledger", timestamp)?;
-
     // Get wallets
     let public_sale_address = Utils::read_from_file("owners/PUBLIC_SALE").map_err(|e| {
         Log::error(
@@ -1106,11 +1102,14 @@ pub async fn verify_ledger(pg_pool: &PgPool) -> Result<(), DynError> {
         let expected: i64 = r.get("expected");
 
         if balance != expected {
-            writeln!(
-                log_file,
-                "Desynchronization: {} → real = {}, expected = {}",
-                address, balance, expected
-            )?;
+            Log::error_msg(
+                "Blockchain",
+                "verify_ledger",
+                &format!(
+                    "Desynchronization: {} → real = {}, expected = {}",
+                    address, balance, expected
+                ),
+            );
         }
     }
     drop(real_ledger);

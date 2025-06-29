@@ -30,32 +30,71 @@ pub struct FakeInsert;
 
 impl FakeInsert {
     /// Mixer all
-    pub async fn mixer(
+    pub async fn insert_month(
         pool: &PgPool,
         year: i32,
         month: u32,
         months_back: i64,
+        amount: i64,
         count_wallet: usize,
         count_tx: usize,
     ) {
         Self::date_retreat(pool, months_back).await.unwrap();
-        Self::wallets(pool, year, month, count_wallet)
-            .await
-            .unwrap();
+        let number_of_day = Self::days_in_month(year, month);
+        let amount_part = Self::random_part(amount, number_of_day as usize);
 
-        let public_sale_count = count_tx - (count_tx / 10);
-        Self::transactions(pool, "PUBLIC_SALE", year, month, public_sale_count)
+        for day in 1..=number_of_day {
+            let day_index = (day - 1).min(amount_part.len() as u32 - 1) as usize;
+            match Self::wallets(
+                pool,
+                year,
+                month,
+                day,
+                (count_wallet as u32 / number_of_day) as usize,
+            )
             .await
-            .unwrap();
+            {
+                Ok(()) => {}
+                Err(_) => {}
+            };
 
-        let random_wallet_count = count_tx - public_sale_count;
-        Self::transactions(pool, "", year, month, random_wallet_count)
+            let public_sale_count = count_tx - (count_tx / 3);
+            match Self::transactions(
+                pool,
+                "PUBLIC_SALE",
+                Some(amount_part[day_index]),
+                year,
+                month,
+                day,
+                public_sale_count,
+            )
             .await
-            .unwrap();
+            {
+                Ok(()) => {}
+                Err(_) => {}
+            };
+
+            let random_wallet_count = count_tx - public_sale_count;
+            match Self::transactions(pool, "", None, year, month, day, random_wallet_count).await {
+                Ok(()) => {}
+                Err(_) => {}
+            };
+
+            // Fake snapshot
+            let snapshot_table = format!("snapshot.wallet_balances_snapshot_day_{}", day);
+            let sql = format!(
+                "CREATE TABLE IF NOT EXISTS {} AS SELECT * FROM core.wallet_balances;",
+                snapshot_table
+            );
+            match sqlx::query(&sql).execute(pool).await {
+                Ok(_) => {}
+                Err(_) => {}
+            };
+        }
     }
 
     /// Shift timestamp bloks and transactions by number month
-    pub async fn date_retreat(pool: &PgPool, months: i64) -> anyhow::Result<()> {
+    async fn date_retreat(pool: &PgPool, months: i64) -> anyhow::Result<()> {
         use sqlx::query;
         let offset_millis = months * 30 * 24 * 60 * 60 * 1000;
 
@@ -79,23 +118,23 @@ impl FakeInsert {
     }
 
     /// Generate of fake wallets
-    pub async fn wallets(pool: &PgPool, year: i32, month: u32, count: usize) -> anyhow::Result<()> {
+    async fn wallets(
+        pool: &PgPool,
+        year: i32,
+        month: u32,
+        day: u32,
+        count: usize,
+    ) -> anyhow::Result<()> {
         // Between dates
-        let start_date = NaiveDate::from_ymd_opt(year, month, 1)
+        let start_date = NaiveDate::from_ymd_opt(year, month, day)
             .unwrap()
             .and_hms_opt(0, 0, 0)
             .unwrap();
-        let end_date = if month == 12 {
-            NaiveDate::from_ymd_opt(year + 1, 1, 1)
-                .unwrap()
-                .and_hms_opt(0, 0, 0)
-                .unwrap()
-        } else {
-            NaiveDate::from_ymd_opt(year, month + 1, 1)
-                .unwrap()
-                .and_hms_opt(0, 0, 0)
-                .unwrap()
-        };
+
+        let end_date = NaiveDate::from_ymd_opt(year, month, day)
+            .unwrap()
+            .and_hms_opt(23, 59, 59)
+            .unwrap();
 
         // Generating loop
         let mut rng = thread_rng();
@@ -167,59 +206,61 @@ impl FakeInsert {
     }
 
     /// Generate of fake transactions
-    pub async fn transactions(
+    async fn transactions(
         pool: &PgPool,
         sender: &str,
+        sender_amount: Option<i64>,
         year: i32,
         month: u32,
+        day: u32,
         count: usize,
     ) -> anyhow::Result<()> {
         // Between dates
-        let start_date = NaiveDate::from_ymd_opt(year, month, 1)
+        let start_date = NaiveDate::from_ymd_opt(year, month, day)
             .unwrap()
             .and_hms_opt(0, 0, 0)
             .unwrap();
-        let end_date = if month == 12 {
-            NaiveDate::from_ymd_opt(year + 1, 1, 1)
-                .unwrap()
-                .and_hms_opt(0, 0, 0)
-                .unwrap()
-        } else {
-            NaiveDate::from_ymd_opt(year, month + 1, 1)
-                .unwrap()
-                .and_hms_opt(0, 0, 0)
-                .unwrap()
-        };
+
+        let end_date = NaiveDate::from_ymd_opt(year, month, day)
+            .unwrap()
+            .and_hms_opt(23, 59, 59)
+            .unwrap();
         let mut rng = thread_rng();
 
         // Sender wallet data
-        let (sender_public_key, sender_private_key, sender_dh_public, sender_dh_secret) = if sender
-            .is_empty()
-        {
-            let sender_data = sqlx::query_as!(
-                FakeWalletKeys,
-                "SELECT public_key, private_key, dh_public, dh_secret FROM core.fake_wallets ORDER BY RANDOM() LIMIT 1"
-            )
-            .fetch_one(pool)
-            .await?;
+        let (sender_public_key, sender_private_key, sender_dh_public, sender_dh_secret) =
+            if sender.is_empty() {
+                let sender_data = sqlx::query_as!(
+                    FakeWalletKeys,
+                    r#"
+                    SELECT fw.public_key, fw.private_key, fw.dh_public, fw.dh_secret
+                    FROM core.fake_wallets fw
+                    JOIN core.wallet_balances wb ON wb.address = ('SRKS_' || fw.public_key)
+                    WHERE wb.balance > 0
+                    ORDER BY RANDOM()
+                    LIMIT 1
+                    "#
+                )
+                .fetch_one(pool)
+                .await?;
 
-            (
-                sender_data.public_key.unwrap(),
-                sender_data.private_key.unwrap(),
-                sender_data.dh_public.unwrap(),
-                sender_data.dh_secret.unwrap(),
-            )
-        } else {
-            let sender_secret = VaultService::get_owner_secret(sender)
-                .await
-                .map_err(|e| anyhow::anyhow!("{}", e))?;
-            (
-                sender_secret.public_key,
-                sender_secret.private_key,
-                sender_secret.dh_public,
-                sender_secret.dh_secret,
-            )
-        };
+                (
+                    sender_data.public_key.unwrap(),
+                    sender_data.private_key.unwrap(),
+                    sender_data.dh_public.unwrap(),
+                    sender_data.dh_secret.unwrap(),
+                )
+            } else {
+                let sender_secret = VaultService::get_owner_secret(sender)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{}", e))?;
+                (
+                    sender_secret.public_key,
+                    sender_secret.private_key,
+                    sender_secret.dh_public,
+                    sender_secret.dh_secret,
+                )
+            };
 
         // Random recepient wallets
         let recipient_wallets: Vec<String> = sqlx::query_scalar!(
@@ -237,7 +278,7 @@ impl FakeInsert {
         )
         .fetch_one(pool)
         .await?;
-        let sender_balance = sender_balance_row.balance;
+        let sender_balance = sender_amount.unwrap_or(sender_balance_row.balance);
         let sender_balance_part = Self::random_part(sender_balance, count);
 
         // Transactions
@@ -256,7 +297,7 @@ impl FakeInsert {
             };
 
             match blockchain::Transaction::send(
-                &sender_public_key,
+                &Wallet::add_prefix(&sender_public_key),
                 &recipient,
                 amount,
                 &sender_dh_public,
@@ -325,5 +366,22 @@ impl FakeInsert {
         cuts.insert(0, 0);
         cuts.push(total);
         cuts.windows(2).map(|w| w[1] - w[0]).collect()
+    }
+
+    /// Days in the month
+    fn days_in_month(year: i32, month: u32) -> u32 {
+        let next_month = if month == 12 {
+            NaiveDate::from_ymd_opt(year + 1, 1, 1)
+        } else {
+            NaiveDate::from_ymd_opt(year, month + 1, 1)
+        };
+
+        let this_month = NaiveDate::from_ymd_opt(year, month, 1);
+
+        if let (Some(next), Some(current)) = (next_month, this_month) {
+            (next - current).num_days() as u32
+        } else {
+            0
+        }
     }
 }
